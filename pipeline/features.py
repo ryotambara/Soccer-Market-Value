@@ -13,6 +13,8 @@ Run: python pipeline/features.py
 """
 
 import json
+import subprocess
+import sys
 import pandas as pd
 import numpy as np
 import os
@@ -20,6 +22,18 @@ import os
 CLEANED_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "processed", "cleaned.csv")
 OUT_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "processed", "features.csv")
 AGE_MEAN_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "processed", "age_mean.json")
+
+# ---------------------------------------------------------------------------
+# Historic Big 6 clubs — all known name variants from TM + WhoScored scrapes
+# ---------------------------------------------------------------------------
+BIG_6_CLUBS = {
+    "Manchester City", "Man City",
+    "Arsenal", "Arsenal FC",
+    "Liverpool", "Liverpool FC",
+    "Chelsea", "Chelsea FC",
+    "Manchester United", "Man Utd", "Manchester United FC",
+    "Tottenham Hotspur", "Tottenham",
+}
 
 # ---------------------------------------------------------------------------
 # 2025-26 Premier League standings
@@ -129,6 +143,10 @@ def main():
     print(f"    is_top6    = {df['is_top6'].sum()} players (pos 5-6)")
     print(f"    mid table  = {mid_mask.sum()} players (pos 7-14, baseline)")
     print(f"    is_bottom6 = {df['is_bottom6'].sum()} players (pos 15-20)")
+
+    # --- Historic Big 6 dummy ---
+    df["is_historic_top6"] = df["club"].isin(BIG_6_CLUBS).astype(int)
+    print(f"  is_historic_top6: {df['is_historic_top6'].sum()} players")
 
     # --- Verify all expected feature columns exist ---
     expected_position_dummies = [
@@ -248,7 +266,7 @@ def main():
         "minutes_played", "goals", "assists",
         "goals_per_90", "assists_per_90",
         "contract_months_remaining", "team_league_position",
-        "is_top4", "is_top6", "is_bottom6",
+        "is_top4", "is_top6", "is_bottom6", "is_historic_top6",
     ]
     dummy_cols = expected_position_dummies + expected_nationality_dummies
 
@@ -277,6 +295,18 @@ def main():
     df.to_csv(OUT_PATH, index=False, encoding="utf-8")
     print(f"\nSaved feature matrix to {OUT_PATH}")
     print(df.describe().to_string())
+
+    # Auto-merge keeper stats so features.csv is always complete
+    print("\n  Auto-merging keeper stats...")
+    _keeper_script = os.path.join(os.path.dirname(__file__), "..", "scraper", "parse_keeper_stats.py")
+    result = subprocess.run(
+        [sys.executable, _keeper_script],
+        capture_output=True, text=True,
+    )
+    if result.returncode == 0:
+        print("  Keeper stats merged successfully.")
+    else:
+        print(f"  WARNING: Keeper stats merge failed:\n{result.stderr}")
 
 
 if __name__ == "__main__":

@@ -124,6 +124,22 @@ def page_player_lookup(df: pd.DataFrame, coefs: dict) -> None:
         all_clubs = sorted(df["club"].dropna().unique().tolist()) if "club" in df.columns else []
         selected_clubs = st.multiselect("Club", options=all_clubs, default=[], placeholder="All clubs")
 
+        st.subheader("Prestige Adjustment")
+        show_prestige = st.toggle(
+            "Show Big 6 prestige premium",
+            value=True,
+            help=(
+                "When ON: includes the historic Big 6 club premium in predicted values. "
+                "When OFF: strips out the prestige coefficient to show what the player "
+                "would be worth at a non-Big-6 club."
+            ),
+        )
+        if not show_prestige:
+            st.caption(
+                "Predicted values adjusted to remove Big 6 prestige premium "
+                "— shows performance-only value."
+            )
+
         nats = sorted(df["nationality"].dropna().unique().tolist()) if "nationality" in df.columns else []
         nat_filter = st.multiselect("Nationality", options=nats)
 
@@ -150,6 +166,25 @@ def page_player_lookup(df: pd.DataFrame, coefs: dict) -> None:
         (filtered["residual"] >= res_range[0]) &
         (filtered["residual"] <= res_range[1])
     ]
+
+    # ── Prestige adjustment ──
+    _BIG6 = {
+        "Manchester City", "Man City", "Arsenal", "Arsenal FC",
+        "Liverpool", "Liverpool FC", "Chelsea", "Chelsea FC",
+        "Manchester United", "Man Utd", "Manchester United FC",
+        "Tottenham Hotspur", "Tottenham",
+    }
+    if not show_prestige and coefs and "coefficients" in coefs:
+        historic_coef = coefs["coefficients"].get("is_historic_top6", 0.0)
+        if historic_coef != 0.0 and "predicted_log_value" in filtered.columns:
+            filtered = filtered.copy()
+            is_big6 = filtered["club"].isin(_BIG6)
+            filtered.loc[is_big6, "predicted_log_value"] = (
+                filtered.loc[is_big6, "predicted_log_value"] - historic_coef
+            )
+            filtered.loc[is_big6, "predicted_market_value_eur"] = np.exp(
+                filtered.loc[is_big6, "predicted_log_value"]
+            )
 
     # ── Leaderboard table ──
     st.subheader(f"Players ({len(filtered)})")
@@ -321,7 +356,10 @@ def page_model_explorer(features_df: pd.DataFrame, results_df: pd.DataFrame) -> 
             "minutes_played", "rating", "xg_diff", "pass_success_pct",
             "fouls_per_game", "dribbled_past_per_game", "yellow_cards",
         ],
-        "Team & League": ["team_league_position"],
+        "Team & League": [
+            "team_league_position", "is_top4", "is_top6", "is_bottom6",
+            "is_historic_top6",
+        ],
         "Position Dummies": [
             "is_striker", "is_winger", "is_attacking_mid", "is_central_mid",
             "is_cdm", "is_fullback", "is_goalkeeper",
@@ -597,6 +635,20 @@ def page_nat_pos(df: pd.DataFrame, coefs: dict) -> None:
             "holding all other factors constant. "
             "Baseline = Centre-Back (0%)."
         )
+
+        # Big 6 prestige note
+        _historic_coef = coef_map.get("is_historic_top6")
+        _historic_pval = (coefs.get("pvalues", {}) or {}).get("is_historic_top6") if coefs else None
+        if _historic_coef is not None:
+            _prem_pct = _dummy_to_pct(_historic_coef)
+            _pval_str = f"p={_historic_pval:.3f}" if _historic_pval is not None else "p=n/a"
+            st.info(
+                f"**Big 6 prestige premium: {_prem_pct:+.1f}%** ({_pval_str})  "
+                f"— the model estimates players at historic Big 6 clubs "
+                f"(Man City, Arsenal, Liverpool, Chelsea, Man Utd, Spurs) "
+                f"command this premium over equivalent players elsewhere, "
+                f"independent of current league position."
+            )
         pos_agg = []
         for grp_name, grp in df.groupby("_pos_group"):
             if grp.empty:

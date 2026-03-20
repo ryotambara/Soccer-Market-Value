@@ -13,6 +13,8 @@ Run: python pipeline/features_2024.py
 """
 
 import json
+import subprocess
+import sys
 import pandas as pd
 import numpy as np
 import os
@@ -21,6 +23,18 @@ BASE = os.path.dirname(__file__)
 CLEANED_PATH  = os.path.join(BASE, "..", "data", "processed", "2024-25", "cleaned.csv")
 OUT_PATH      = os.path.join(BASE, "..", "data", "processed", "2024-25", "features.csv")
 AGE_MEAN_PATH = os.path.join(BASE, "..", "data", "processed", "2024-25", "age_mean.json")
+
+# ---------------------------------------------------------------------------
+# Historic Big 6 clubs — all known name variants from TM + WhoScored scrapes
+# ---------------------------------------------------------------------------
+BIG_6_CLUBS = {
+    "Manchester City", "Man City",
+    "Arsenal", "Arsenal FC",
+    "Liverpool", "Liverpool FC",
+    "Chelsea", "Chelsea FC",
+    "Manchester United", "Man Utd", "Manchester United FC",
+    "Tottenham Hotspur", "Tottenham",
+}
 
 # ---------------------------------------------------------------------------
 # 2024-25 Premier League final standings
@@ -147,6 +161,10 @@ def main():
     print(f"    is_bottom6 = {df['is_bottom6'].sum()} players  "
           f"(Crystal Palace–Southampton)")
 
+    # ── Historic Big 6 dummy ──────────────────────────────────────
+    df["is_historic_top6"] = df["club"].isin(BIG_6_CLUBS).astype(int)
+    print(f"  is_historic_top6: {df['is_historic_top6'].sum()} players")
+
     # ── Verify position/nationality dummies exist ─────────────────
     expected_position_dummies = [
         "is_striker", "is_winger", "is_attacking_mid",
@@ -248,7 +266,7 @@ def main():
         "minutes_played", "goals", "assists",
         "goals_per_90", "assists_per_90",
         "contract_months_remaining", "team_league_position",
-        "is_top4", "is_top6", "is_bottom6",
+        "is_top4", "is_top6", "is_bottom6", "is_historic_top6",
     ]
     dummy_cols = expected_position_dummies + expected_nationality_dummies
 
@@ -289,6 +307,18 @@ def main():
     print("\nPosition group distribution:")
     if "position_group" in df.columns:
         print(df["position_group"].value_counts().to_string())
+
+    # Auto-merge keeper stats so features.csv is always complete
+    print("\n  Auto-merging keeper stats...")
+    _keeper_script = os.path.join(os.path.dirname(__file__), "..", "scraper", "parse_keeper_stats.py")
+    result = subprocess.run(
+        [sys.executable, _keeper_script],
+        capture_output=True, text=True,
+    )
+    if result.returncode == 0:
+        print("  Keeper stats merged successfully.")
+    else:
+        print(f"  WARNING: Keeper stats merge failed:\n{result.stderr}")
 
 
 if __name__ == "__main__":

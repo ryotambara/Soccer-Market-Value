@@ -41,6 +41,8 @@ INDEPENDENT_VARS = [
     "is_top4",
     "is_top6",
     "is_bottom6",
+    # Historic Big 6 prestige dummy (independent of current league position)
+    "is_historic_top6",
     # Global WhoScored stats
     "rating",
     "xg_diff",
@@ -178,9 +180,11 @@ def main():
 
     # --- Save coefficients JSON ---
     coef_dict = {k: float(v) for k, v in results.params.items()}
+    pval_dict = {k: float(v) for k, v in results.pvalues.items()}
     coef_json = {
         "intercept":      float(results.params.get("const", 0.0)),
         "coefficients":   {k: v for k, v in coef_dict.items() if k != "const"},
+        "pvalues":        {k: v for k, v in pval_dict.items() if k != "const"},
         "residual_std":   float(np.std(residuals.values)),
         "mean_log_value": float(y.mean()),
         "season":         "2024-25",
@@ -213,9 +217,21 @@ def main():
             p    = float(results.pvalues[tier_var])
             prem = (np.exp(c) - 1.0) * 100
             stars = "***" if p < 0.01 else "**" if p < 0.05 else "*" if p < 0.1 else ""
-            print(f"  {tier_var:<14} {c:>8.4f}  {p:>9.4f}  {prem:>+11.1f}% {stars}")
+            print(f"  {tier_var:<20} {c:>8.4f}  {p:>9.4f}  {prem:>+11.1f}% {stars}")
         else:
-            print(f"  {tier_var:<14}  (dropped — collinearity)")
+            print(f"  {tier_var:<20}  (dropped — collinearity)")
+
+    # ── 2b. Historic Big 6 prestige coefficient ───────────────────
+    print(f"\n{'=' * 60}")
+    print("Historic Big 6 Prestige Premium  (independent of current standing)")
+    if "is_historic_top6" in results.params.index:
+        c    = float(results.params["is_historic_top6"])
+        p    = float(results.pvalues["is_historic_top6"])
+        prem = (np.exp(c) - 1.0) * 100
+        stars = "***" if p < 0.01 else "**" if p < 0.05 else "*" if p < 0.1 else ""
+        print(f"  is_historic_top6: coef={c:+.4f}  p={p:.4f}  premium={prem:+.1f}% {stars}")
+    else:
+        print("  is_historic_top6: (dropped — not in model)")
 
     # ── 3. Implied peak age per position ──────────────────────────
     age_mean = 0.0
