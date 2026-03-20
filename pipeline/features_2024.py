@@ -165,6 +165,15 @@ def main():
     df["is_historic_top6"] = df["club"].isin(BIG_6_CLUBS).astype(int)
     print(f"  is_historic_top6: {df['is_historic_top6'].sum()} players")
 
+    # ── Promoted clubs dummy (newly promoted to PL 2024-25) ───────
+    PROMOTED_2024_25 = [
+        "Leicester City", "Leicester",
+        "Ipswich Town", "Ipswich",
+        "Southampton FC", "Southampton",
+    ]
+    df["is_promoted"] = df["club"].isin(PROMOTED_2024_25).astype(int)
+    print(f"  is_promoted: {df['is_promoted'].sum()} players")
+
     # ── Verify position/nationality dummies exist ─────────────────
     expected_position_dummies = [
         "is_striker", "is_winger", "is_attacking_mid",
@@ -266,7 +275,7 @@ def main():
         "minutes_played", "goals", "assists",
         "goals_per_90", "assists_per_90",
         "contract_months_remaining", "team_league_position",
-        "is_top4", "is_top6", "is_bottom6", "is_historic_top6",
+        "is_top4", "is_top6", "is_bottom6", "is_historic_top6", "is_promoted",
     ]
     dummy_cols = expected_position_dummies + expected_nationality_dummies
 

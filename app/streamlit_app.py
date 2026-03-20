@@ -216,15 +216,27 @@ def page_player_lookup(df: pd.DataFrame, coefs: dict) -> None:
     # ── Leaderboard table ──
     st.subheader(f"Players ({len(filtered)})")
 
+    # Add promoted tag to club column
+    _PROMOTED_ALL = {
+        "Sunderland AFC", "Sunderland", "Leeds United", "Leeds",
+        "Burnley FC", "Burnley",
+        "Leicester City", "Leicester", "Ipswich Town", "Ipswich",
+        "Southampton FC", "Southampton",
+    }
+    tbl_df = filtered.copy()
+    tbl_df["Club"] = tbl_df["club"].apply(
+        lambda c: f"{c} ↑" if c in _PROMOTED_ALL else c
+    )
+
     display_cols = {
-        "player_name": "Player", "club": "Club", "position": "Position",
+        "player_name": "Player", "Club": "Club", "position": "Position",
         "age": "Age", "market_value_eur": "Actual Value",
         "display_predicted": "Predicted Value",
         "display_residual": "Residual", "display_valuation": "Valuation",
         "percentile": "Percentile",
     }
-    show_cols = [c for c in display_cols if c in filtered.columns]
-    tbl = filtered[show_cols].rename(columns=display_cols).reset_index(drop=True)
+    show_cols = [c for c in display_cols if c in tbl_df.columns]
+    tbl = tbl_df[show_cols].rename(columns=display_cols).reset_index(drop=True)
 
     for col in ("Actual Value", "Predicted Value"):
         if col in tbl.columns:
@@ -232,6 +244,7 @@ def page_player_lookup(df: pd.DataFrame, coefs: dict) -> None:
     if "Residual" in tbl.columns:
         tbl["Residual"] = tbl["Residual"].round(4)
 
+    st.caption("↑ = newly promoted club")
     st.dataframe(tbl, width="stretch", height=400)
 
     # ── Player Detail ──
@@ -387,7 +400,7 @@ def page_model_explorer(features_df: pd.DataFrame, results_df: pd.DataFrame) -> 
         ],
         "Team & League": [
             "team_league_position", "is_top4", "is_top6", "is_bottom6",
-            "is_historic_top6",
+            "is_historic_top6", "is_promoted",
         ],
         "Position Dummies": [
             "is_striker", "is_winger", "is_attacking_mid", "is_central_mid",

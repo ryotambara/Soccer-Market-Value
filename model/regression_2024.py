@@ -43,6 +43,8 @@ INDEPENDENT_VARS = [
     "is_bottom6",
     # Historic Big 6 prestige dummy (independent of current league position)
     "is_historic_top6",
+    # Newly promoted clubs
+    "is_promoted",
     # Global WhoScored stats
     "rating",
     "xg_diff",
@@ -232,6 +234,19 @@ def main():
         print(f"  is_historic_top6: coef={c:+.4f}  p={p:.4f}  premium={prem:+.1f}% {stars}")
     else:
         print("  is_historic_top6: (dropped — not in model)")
+
+    # ── 2c. Promoted vs bottom 6 comparison ──────────────────────
+    print(f"\n{'=' * 60}")
+    print("Promoted vs Bottom 6 effect:")
+    for var in ("is_promoted", "is_bottom6"):
+        if var in results.params.index:
+            c    = float(results.params[var])
+            p    = float(results.pvalues[var])
+            eff  = (np.exp(c) - 1.0) * 100
+            stars = "***" if p < 0.01 else "**" if p < 0.05 else "*" if p < 0.1 else ""
+            print(f"  {var:<12}  coef={c:+.4f}  p={p:.4f}  effect={eff:+.1f}% {stars}")
+        else:
+            print(f"  {var:<12}  (dropped — not in model)")
 
     # ── 3. Implied peak age per position ──────────────────────────
     age_mean = 0.0
