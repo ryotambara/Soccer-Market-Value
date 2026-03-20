@@ -113,7 +113,17 @@ def infer_pos_group(row: pd.Series) -> str:
 def page_player_lookup(df: pd.DataFrame, coefs: dict) -> None:
     st.title("Player Lookup")
 
-    # ── Sidebar filters ──
+    _BIG6 = {
+        "Manchester City", "Man City", "Arsenal", "Arsenal FC",
+        "Liverpool", "Liverpool FC", "Chelsea", "Chelsea FC",
+        "Manchester United", "Man Utd", "Manchester United FC",
+        "Tottenham Hotspur", "Tottenham",
+    }
+    prestige_coef = 0.0
+    if coefs and "coefficients" in coefs:
+        prestige_coef = float(coefs["coefficients"].get("is_historic_top6", 0.0))
+
+    # ── Sidebar: read toggle first so we can compute display columns ──
     with st.sidebar:
         st.subheader("Filters")
         search = st.text_input("Search player name", "")
@@ -145,13 +155,39 @@ def page_player_lookup(df: pd.DataFrame, coefs: dict) -> None:
 
         val_filter = st.selectbox("Valuation", ["All", "undervalued", "overvalued", "fairly valued"])
 
-        res_min = float(df["residual"].min()) if "residual" in df.columns else -2.0
-        res_max = float(df["residual"].max()) if "residual" in df.columns else 2.0
+    # ── Build display columns (must happen before slider so range is correct) ──
+    working = df.copy()
+    if "is_historic_top6" not in working.columns:
+        working["is_historic_top6"] = working["club"].isin(_BIG6).astype(int)
+
+    big6_mask = working["is_historic_top6"] == 1
+    working["display_predicted"] = working["predicted_market_value_eur"].copy()
+    if not show_prestige and prestige_coef != 0.0:
+        log_pred = np.log(working.loc[big6_mask, "predicted_market_value_eur"].clip(lower=1))
+        working.loc[big6_mask, "display_predicted"] = np.exp(log_pred - prestige_coef)
+
+    working["display_residual"] = (
+        np.log(working["market_value_eur"].clip(lower=1)) -
+        np.log(working["display_predicted"].clip(lower=1))
+    )
+
+    def _vlabel(r: float) -> str:
+        if r > 0.15:   return "overvalued"
+        if r < -0.15:  return "undervalued"
+        return "fairly valued"
+
+    working["display_valuation"] = working["display_residual"].apply(_vlabel)
+
+    # ── Residual slider (uses display_residual so range matches current toggle) ──
+    res_min = float(working["display_residual"].min())
+    res_max = float(working["display_residual"].max())
+    with st.sidebar:
         res_range = st.slider("Residual range", res_min, res_max,
                               (res_min, res_max), step=0.01)
 
     # ── Apply filters ──
-    filtered = df.copy()
+
+    filtered = working.copy()
     if search:
         filtered = filtered[filtered["player_name"].str.contains(search, case=False, na=False)]
     if pos_filter:
@@ -161,30 +197,21 @@ def page_player_lookup(df: pd.DataFrame, coefs: dict) -> None:
     if nat_filter:
         filtered = filtered[filtered["nationality"].isin(nat_filter)]
     if val_filter != "All":
-        filtered = filtered[filtered["valuation_label"] == val_filter]
+        filtered = filtered[filtered["display_valuation"] == val_filter]
     filtered = filtered[
-        (filtered["residual"] >= res_range[0]) &
-        (filtered["residual"] <= res_range[1])
+        (filtered["display_residual"] >= res_range[0]) &
+        (filtered["display_residual"] <= res_range[1])
     ]
 
-    # ── Prestige adjustment ──
-    _BIG6 = {
-        "Manchester City", "Man City", "Arsenal", "Arsenal FC",
-        "Liverpool", "Liverpool FC", "Chelsea", "Chelsea FC",
-        "Manchester United", "Man Utd", "Manchester United FC",
-        "Tottenham Hotspur", "Tottenham",
-    }
-    if not show_prestige and coefs and "coefficients" in coefs:
-        historic_coef = coefs["coefficients"].get("is_historic_top6", 0.0)
-        if historic_coef != 0.0 and "predicted_log_value" in filtered.columns:
-            filtered = filtered.copy()
-            is_big6 = filtered["club"].isin(_BIG6)
-            filtered.loc[is_big6, "predicted_log_value"] = (
-                filtered.loc[is_big6, "predicted_log_value"] - historic_coef
-            )
-            filtered.loc[is_big6, "predicted_market_value_eur"] = np.exp(
-                filtered.loc[is_big6, "predicted_log_value"]
-            )
+    # ── Prestige info box ──
+    if not show_prestige and prestige_coef != 0.0:
+        pct_removed = (1.0 - np.exp(-prestige_coef)) * 100
+        st.info(
+            f"Prestige premium removed for Big 6 players "
+            f"(−{abs(prestige_coef):.2f} log points = "
+            f"−{pct_removed:.0f}% from predicted value). "
+            f"Rankings show performance-only value."
+        )
 
     # ── Leaderboard table ──
     st.subheader(f"Players ({len(filtered)})")
@@ -192,8 +219,8 @@ def page_player_lookup(df: pd.DataFrame, coefs: dict) -> None:
     display_cols = {
         "player_name": "Player", "club": "Club", "position": "Position",
         "age": "Age", "market_value_eur": "Actual Value",
-        "predicted_market_value_eur": "Predicted Value",
-        "residual": "Residual", "valuation_label": "Valuation",
+        "display_predicted": "Predicted Value",
+        "display_residual": "Residual", "display_valuation": "Valuation",
         "percentile": "Percentile",
     }
     show_cols = [c for c in display_cols if c in filtered.columns]
@@ -202,6 +229,8 @@ def page_player_lookup(df: pd.DataFrame, coefs: dict) -> None:
     for col in ("Actual Value", "Predicted Value"):
         if col in tbl.columns:
             tbl[col] = tbl[col].apply(fmt_eur)
+    if "Residual" in tbl.columns:
+        tbl["Residual"] = tbl["Residual"].round(4)
 
     st.dataframe(tbl, width="stretch", height=400)
 
