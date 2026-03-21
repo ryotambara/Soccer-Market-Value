@@ -16,13 +16,10 @@ import os
 import re
 import pandas as pd
 
-SOURCE_PATH = os.path.join(
-    os.path.dirname(__file__), "..", "data", "raw",
-    "bundesliga_2025-26_players.csv"
-)
-OUTPUT_PATH = os.path.join(
-    os.path.dirname(__file__), "..", "data", "raw",
-    "whoscored_bundesliga_processed.csv"
+_BASE_DIR   = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_RAW_BL_2526 = os.path.join(_BASE_DIR, "data", "raw", "Bundesliga", "2025-26")
+SOURCE_PATH  = os.path.join(_RAW_BL_2526, "whoscored.csv")
+OUTPUT_PATH  = os.path.join(_RAW_BL_2526, "whoscored_processed.csv"
 )
 
 # ---------------------------------------------------------------------------

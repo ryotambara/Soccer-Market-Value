@@ -17,8 +17,8 @@ import statsmodels.api as sm
 import os
 import json
 
-BASE          = os.path.dirname(__file__)
-SEASON_DIR    = os.path.join(BASE, "..", "data", "processed", "bundesliga")
+BASE_DIR      = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+SEASON_DIR    = os.path.join(BASE_DIR, "data", "processed", "bundesliga", "2025-26")
 FEATURES_PATH = os.path.join(SEASON_DIR, "features.csv")
 RESULTS_PATH  = os.path.join(SEASON_DIR, "results.csv")
 SUMMARY_PATH  = os.path.join(SEASON_DIR, "model_summary.txt")
@@ -26,8 +26,8 @@ COEF_PATH     = os.path.join(SEASON_DIR, "model_coefficients.json")
 AGE_MEAN_PATH = os.path.join(SEASON_DIR, "age_mean.json")
 
 # PL results for cross-league comparison
-PL_RESULTS_PATH = os.path.join(BASE, "..", "data", "processed", "results.csv")
-PL_COEF_PATH    = os.path.join(BASE, "..", "data", "processed", "model_coefficients.json")
+PL_RESULTS_PATH = os.path.join(BASE_DIR, "data", "processed", "premier_league", "2025-26", "results.csv")
+PL_COEF_PATH    = os.path.join(BASE_DIR, "data", "processed", "premier_league", "2025-26", "model_coefficients.json")
 
 DEPENDENT_VAR = "log_market_value"
 
@@ -358,7 +358,7 @@ def main():
 
         # Try to get PL R² from the PL model summary text
         pl_summary_path = os.path.join(
-            BASE, "..", "data", "processed", "model_summary.txt"
+            BASE_DIR, "data", "processed", "premier_league", "2025-26", "model_summary.txt"
         )
         pl_r2_str = "N/A"
         if os.path.exists(pl_summary_path):

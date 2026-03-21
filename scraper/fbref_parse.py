@@ -14,8 +14,9 @@ import pandas as pd
 
 MIN_MINUTES = 500
 
-_RAW_DIR = os.path.join(os.path.dirname(__file__), "..", "data", "raw")
-OUTPUT_PATH = os.path.join(_RAW_DIR, "fbref_processed.csv")
+_BASE_DIR    = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_RAW_PL_2526 = os.path.join(_BASE_DIR, "data", "raw", "premier_league", "2025-26")
+OUTPUT_PATH  = os.path.join(_RAW_PL_2526, "fbref_processed.csv")
 
 
 def parse(path: str) -> pd.DataFrame:

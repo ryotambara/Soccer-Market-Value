@@ -18,8 +18,10 @@ import re
 import pandas as pd
 from rapidfuzz import fuzz, process
 
-PASTE_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "raw", "stats_2025-26_paste.txt")
-ENTRY_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "raw", "stats_2025-26_entry.csv")
+_BASE_DIR  = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_RAW_PL_2526 = os.path.join(_BASE_DIR, "data", "raw", "premier_league", "2025-26")
+PASTE_PATH = os.path.join(_RAW_PL_2526, "fbref_paste.txt")
+ENTRY_PATH = os.path.join(_RAW_PL_2526, "fbref_stats.csv")
 
 FUZZY_THRESHOLD = 85
 

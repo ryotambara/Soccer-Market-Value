@@ -13,14 +13,10 @@ import csv
 import os
 import pandas as pd
 
-SOURCE_PATH = os.path.join(
-    os.path.dirname(__file__), "..", "data", "raw",
-    "Football_Player_Data-Analysis2024:20205.csv"
-)
-OUTPUT_PATH = os.path.join(
-    os.path.dirname(__file__), "..", "data", "raw",
-    "football_data_2024_processed.csv"
-)
+_BASE_DIR    = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_RAW_PL_2425 = os.path.join(_BASE_DIR, "data", "raw", "premier_league", "2024-25")
+SOURCE_PATH  = os.path.join(_RAW_PL_2425, "player_data.csv")
+OUTPUT_PATH  = os.path.join(_RAW_PL_2425, "football_data_processed.csv")
 
 # 2024-25 PL clubs as they appear in the source file
 PL_TEAMS_2024 = {

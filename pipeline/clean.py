@@ -10,8 +10,10 @@ Run: python pipeline/clean.py
 import pandas as pd
 import os
 
-MERGED_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "processed", "merged.csv")
-OUT_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "processed", "cleaned.csv")
+_BASE_DIR    = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_PROC_PL_2526 = os.path.join(_BASE_DIR, "data", "processed", "premier_league", "2025-26")
+MERGED_PATH  = os.path.join(_PROC_PL_2526, "merged.csv")
+OUT_PATH     = os.path.join(_PROC_PL_2526, "cleaned.csv")
 
 # ---------------------------------------------------------------------------
 # Position mapping — raw Transfermarkt labels → standardised groups

@@ -30,7 +30,8 @@ HEADERS = {
 }
 
 MIN_MINUTES = 500
-OUTPUT_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "raw", "fbref_raw.csv")
+_BASE_DIR   = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+OUTPUT_PATH = os.path.join(_BASE_DIR, "data", "raw", "premier_league", "2025-26", "fbref_raw.csv")
 
 
 def fetch_fbref_table(url: str) -> pd.DataFrame:

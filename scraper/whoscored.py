@@ -28,8 +28,8 @@ from selenium.common.exceptions import (
 from webdriver_manager.chrome import ChromeDriverManager
 
 # ── Paths ───────────────────────────────────────────────────────────────────
-_RAW_DIR = os.path.join(os.path.dirname(__file__), "..", "data", "raw")
-OUTPUT_PATH = os.path.join(_RAW_DIR, "whoscored_raw.csv")
+_BASE_DIR    = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+OUTPUT_PATH  = os.path.join(_BASE_DIR, "data", "raw", "premier_league", "2024-25", "whoscored_raw.csv")
 
 # ── Target URL ───────────────────────────────────────────────────────────────
 STATS_URL = (
@@ -314,7 +314,7 @@ def merge_tabs(
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main() -> None:
-    os.makedirs(_RAW_DIR, exist_ok=True)
+    os.makedirs(os.path.dirname(OUTPUT_PATH), exist_ok=True)
 
     print("=" * 60)
     print("WhoScored Scraper — Premier League 2024-25")

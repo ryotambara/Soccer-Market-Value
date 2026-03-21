@@ -20,15 +20,13 @@ import pandas as pd
 from rapidfuzz import fuzz, process
 from typing import Optional, List, Tuple
 
-BASE     = os.path.dirname(__file__)
-RAW_DIR  = os.path.join(BASE, "..", "data", "raw")
-PROC_DIR = os.path.join(BASE, "..", "data", "processed", "bundesliga")
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 SEASONS = [
     {
         "label":         "2025-26",
-        "raw_path":      os.path.join(RAW_DIR,  "bundesliga_keepers_2025-26.csv"),
-        "features_path": os.path.join(PROC_DIR, "features.csv"),
+        "raw_path":      os.path.join(BASE_DIR, "data", "raw", "Bundesliga", "2025-26", "keepers.csv"),
+        "features_path": os.path.join(BASE_DIR, "data", "processed", "bundesliga", "2025-26", "features.csv"),
     },
 ]
 

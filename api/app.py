@@ -20,7 +20,8 @@ from rapidfuzz import process, fuzz
 app = Flask(__name__)
 CORS(app)
 
-RESULTS_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "processed", "results.csv")
+_BASE_DIR    = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+RESULTS_PATH = os.path.join(_BASE_DIR, "data", "processed", "premier_league", "2025-26", "results.csv")
 
 # Global dataframe loaded at startup
 players_df: pd.DataFrame = pd.DataFrame()

@@ -28,10 +28,11 @@ from openpyxl.chart import BarChart, Reference
 from openpyxl.chart.series import SeriesLabel
 
 # ── Paths ──────────────────────────────────────────────────────────────────
-BASE = os.path.dirname(__file__)
-RESULTS_PATH    = os.path.join(BASE, "..", "data", "processed", "results.csv")
-SUMMARY_PATH    = os.path.join(BASE, "..", "data", "processed", "model_summary.txt")
-OUT_DIR         = os.path.join(BASE, "..", "data", "exports")
+BASE_DIR        = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_PROC_PL_2526   = os.path.join(BASE_DIR, "data", "processed", "premier_league", "2025-26")
+RESULTS_PATH    = os.path.join(_PROC_PL_2526, "results.csv")
+SUMMARY_PATH    = os.path.join(_PROC_PL_2526, "model_summary.txt")
+OUT_DIR         = os.path.join(BASE_DIR, "data", "exports")
 OUT_PATH        = os.path.join(OUT_DIR, "pitchiq_players.xlsx")
 
 # ── Colour constants ───────────────────────────────────────────────────────

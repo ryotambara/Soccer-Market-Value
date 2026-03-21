@@ -17,9 +17,11 @@ import statsmodels.api as sm
 from statsmodels.stats.outliers_influence import variance_inflation_factor
 import os
 
-FEATURES_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "processed", "features.csv")
-RESULTS_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "processed", "results.csv")
-SUMMARY_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "processed", "model_summary.txt")
+_BASE_DIR     = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_PROC_PL_2526 = os.path.join(_BASE_DIR, "data", "processed", "premier_league", "2025-26")
+FEATURES_PATH = os.path.join(_PROC_PL_2526, "features.csv")
+RESULTS_PATH  = os.path.join(_PROC_PL_2526, "results.csv")
+SUMMARY_PATH  = os.path.join(_PROC_PL_2526, "model_summary.txt")
 
 DEPENDENT_VAR = "log_market_value"
 

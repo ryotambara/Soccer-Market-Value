@@ -11,10 +11,14 @@ import pandas as pd
 import os
 from rapidfuzz import fuzz, process
 
-TM_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "raw", "transfermarkt_2025-26.csv")
-FB_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "raw", "stats_2025-26_entry.csv")
-WS_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "raw", "whoscored_processed.csv")
-OUT_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "processed", "merged.csv")
+_BASE_DIR    = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_RAW_PL_2526  = os.path.join(_BASE_DIR, "data", "raw", "premier_league", "2025-26")
+_PROC_PL_2526 = os.path.join(_BASE_DIR, "data", "processed", "premier_league", "2025-26")
+
+TM_PATH  = os.path.join(_RAW_PL_2526,  "transfermarkt.csv")
+FB_PATH  = os.path.join(_RAW_PL_2526,  "fbref_stats.csv")
+WS_PATH  = os.path.join(_RAW_PL_2526,  "whoscored.csv")
+OUT_PATH = os.path.join(_PROC_PL_2526, "merged.csv")
 
 FUZZY_THRESHOLD = 88
 

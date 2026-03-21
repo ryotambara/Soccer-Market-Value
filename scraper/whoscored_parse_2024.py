@@ -16,12 +16,10 @@ import os
 import re
 import pandas as pd
 
-SOURCE_PATH = os.path.join(
-    os.path.dirname(__file__), "..", "data", "raw", "2024:2025 player data.csv"
-)
-OUTPUT_PATH = os.path.join(
-    os.path.dirname(__file__), "..", "data", "raw", "whoscored_2024_processed.csv"
-)
+_BASE_DIR    = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_RAW_PL_2425 = os.path.join(_BASE_DIR, "data", "raw", "premier_league", "2024-25")
+SOURCE_PATH  = os.path.join(_RAW_PL_2425, "whoscored_raw.csv")
+OUTPUT_PATH  = os.path.join(_RAW_PL_2425, "whoscored.csv")
 
 # 2024-25 PL clubs as they appear in the WhoScored player field
 PL_CLUBS = [

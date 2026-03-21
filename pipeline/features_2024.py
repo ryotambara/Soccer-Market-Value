@@ -19,10 +19,11 @@ import pandas as pd
 import numpy as np
 import os
 
-BASE = os.path.dirname(__file__)
-CLEANED_PATH  = os.path.join(BASE, "..", "data", "processed", "2024-25", "cleaned.csv")
-OUT_PATH      = os.path.join(BASE, "..", "data", "processed", "2024-25", "features.csv")
-AGE_MEAN_PATH = os.path.join(BASE, "..", "data", "processed", "2024-25", "age_mean.json")
+BASE_DIR      = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_PROC_PL_2425 = os.path.join(BASE_DIR, "data", "processed", "premier_league", "2024-25")
+CLEANED_PATH  = os.path.join(_PROC_PL_2425, "cleaned.csv")
+OUT_PATH      = os.path.join(_PROC_PL_2425, "features.csv")
+AGE_MEAN_PATH = os.path.join(_PROC_PL_2425, "age_mean.json")
 
 # ---------------------------------------------------------------------------
 # Historic Big 6 clubs — all known name variants from TM + WhoScored scrapes

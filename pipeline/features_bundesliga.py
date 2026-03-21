@@ -17,10 +17,11 @@ import pandas as pd
 import numpy as np
 import os
 
-BASE          = os.path.dirname(__file__)
-CLEANED_PATH  = os.path.join(BASE, "..", "data", "processed", "bundesliga", "cleaned.csv")
-OUT_PATH      = os.path.join(BASE, "..", "data", "processed", "bundesliga", "features.csv")
-AGE_MEAN_PATH = os.path.join(BASE, "..", "data", "processed", "bundesliga", "age_mean.json")
+BASE_DIR      = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_PROC_BL_2526 = os.path.join(BASE_DIR, "data", "processed", "bundesliga", "2025-26")
+CLEANED_PATH  = os.path.join(_PROC_BL_2526, "cleaned.csv")
+OUT_PATH      = os.path.join(_PROC_BL_2526, "features.csv")
+AGE_MEAN_PATH = os.path.join(_PROC_BL_2526, "age_mean.json")
 
 # ---------------------------------------------------------------------------
 # Historic top Bundesliga clubs (equivalent of PL Big Six)

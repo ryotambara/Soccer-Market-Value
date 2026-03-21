@@ -14,11 +14,10 @@ Run: python pipeline/clean_bundesliga.py
 import pandas as pd
 import os
 
-BASE        = os.path.dirname(__file__)
-MERGED_PATH = os.path.join(BASE, "..", "data", "processed",
-                            "bundesliga", "merged.csv")
-OUT_PATH    = os.path.join(BASE, "..", "data", "processed",
-                            "bundesliga", "cleaned.csv")
+BASE_DIR      = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_PROC_BL_2526 = os.path.join(BASE_DIR, "data", "processed", "bundesliga", "2025-26")
+MERGED_PATH   = os.path.join(_PROC_BL_2526, "merged.csv")
+OUT_PATH      = os.path.join(_PROC_BL_2526, "cleaned.csv")
 
 # ---------------------------------------------------------------------------
 # Position mapping — Transfermarkt labels → standardised groups

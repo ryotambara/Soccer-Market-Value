@@ -52,10 +52,12 @@ _SAISON = "2025" if MODE == "2025-26" else "2024"
 _league_cfg = LEAGUE_CONFIG[LEAGUE]
 LEAGUE_URL  = f"{BASE_URL}/{_league_cfg['url_slug']}/saison_id/{_SAISON}"
 
-_RAW_DIR    = os.path.join(os.path.dirname(__file__), "..", "data", "raw")
-OUTPUT_PATH = os.path.join(
-    _RAW_DIR, f"transfermarkt_{_league_cfg['output_suffix']}_{MODE}.csv"
-)
+_BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_RAW_LEAGUE_DIR_MAP = {
+    "premier-league": os.path.join(_BASE_DIR, "data", "raw", "premier_league", MODE),
+    "bundesliga":     os.path.join(_BASE_DIR, "data", "raw", "Bundesliga", MODE),
+}
+OUTPUT_PATH = os.path.join(_RAW_LEAGUE_DIR_MAP[LEAGUE], "transfermarkt.csv")
 
 HEADERS = {
     "User-Agent": (

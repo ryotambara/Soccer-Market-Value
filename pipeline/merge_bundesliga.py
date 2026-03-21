@@ -19,14 +19,13 @@ import os
 import pandas as pd
 from rapidfuzz import fuzz, process
 
-BASE = os.path.dirname(__file__)
+BASE_DIR      = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_RAW_BL_2526  = os.path.join(BASE_DIR, "data", "raw", "Bundesliga", "2025-26")
+_PROC_BL_2526 = os.path.join(BASE_DIR, "data", "processed", "bundesliga", "2025-26")
 
-WS_PATH  = os.path.join(BASE, "..", "data", "raw",
-                         "whoscored_bundesliga_processed.csv")
-TM_PATH  = os.path.join(BASE, "..", "data", "raw",
-                         "transfermarkt_bundesliga_2025-26.csv")
-OUT_PATH = os.path.join(BASE, "..", "data", "processed",
-                         "bundesliga", "merged.csv")
+WS_PATH  = os.path.join(_RAW_BL_2526,  "whoscored_processed.csv")
+TM_PATH  = os.path.join(_RAW_BL_2526,  "transfermarkt.csv")
+OUT_PATH = os.path.join(_PROC_BL_2526, "merged.csv")
 
 # Higher threshold for name-only matching (no club to disambiguate)
 TM_FUZZY_THRESHOLD = 90

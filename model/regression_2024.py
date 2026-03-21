@@ -16,8 +16,8 @@ import statsmodels.api as sm
 import os
 import json
 
-BASE = os.path.dirname(__file__)
-SEASON_DIR    = os.path.join(BASE, "..", "data", "processed", "2024-25")
+BASE_DIR      = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+SEASON_DIR    = os.path.join(BASE_DIR, "data", "processed", "premier_league", "2024-25")
 FEATURES_PATH = os.path.join(SEASON_DIR, "features.csv")
 RESULTS_PATH  = os.path.join(SEASON_DIR, "results.csv")
 SUMMARY_PATH  = os.path.join(SEASON_DIR, "model_summary.txt")
