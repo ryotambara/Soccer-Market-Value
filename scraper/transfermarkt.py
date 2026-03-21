@@ -1,17 +1,17 @@
 """
 scraper/transfermarkt.py
 
-Scrapes Premier League player data from Transfermarkt.
+Scrapes player data from Transfermarkt for any supported league.
 
-Two modes — set MODE at the top of this file:
+Two knobs at the top of this file:
 
-  MODE = "2025-26"  current season, scrapes live market values
-  MODE = "2024-25"  last season, fetches historical market value closest
-                    to 2025-06-01 from each player's profile page
+  MODE   — season to scrape
+  LEAGUE — league to scrape
 
 Output files:
-  data/raw/transfermarkt_2025-26.csv
-  data/raw/transfermarkt_2024-25.csv
+  data/raw/transfermarkt_{league}_{mode}.csv
+  e.g. transfermarkt_pl_2025-26.csv
+       transfermarkt_bundesliga_2025-26.csv
 
 Run: python scraper/transfermarkt.py
 """
@@ -25,29 +25,37 @@ import re
 import os
 from typing import Optional, List, Tuple
 from datetime import datetime, date
-from dateutil import parser as dateutil_parser
 
-# ── Change this to switch seasons ─────────────────────────────────────────
-MODE = "2024-25"   # "2025-26" | "2024-25"
+# ── Change these to switch season / league ────────────────────────────────
+MODE   = "2025-26"    # "2025-26" | "2024-25"
+LEAGUE = "bundesliga" # "premier-league" | "bundesliga"
 # ──────────────────────────────────────────────────────────────────────────
 
-BASE_URL = "https://www.transfermarkt.com"
-_contract_debug_count = 0  # prints raw date string for first 3 players
+LEAGUE_CONFIG = {
+    "premier-league": {
+        "url_slug":      "premier-league/startseite/wettbewerb/GB1",
+        "output_suffix": "pl",
+        "name":          "Premier League",
+    },
+    "bundesliga": {
+        "url_slug":      "bundesliga/startseite/wettbewerb/L1",
+        "output_suffix": "bundesliga",
+        "name":          "Bundesliga",
+    },
+}
 
-# Target date for 2024-25 historical market value lookup
-_TARGET_DATE_2425 = date(2025, 6, 1)
-_MV_WINDOW_DAYS   = 366   # accept values within 12 months of target
+BASE_URL = "https://www.transfermarkt.com"
 
 # Transfermarkt encodes the season year as the start year (2024 = 2024-25)
 _SAISON = "2025" if MODE == "2025-26" else "2024"
 
-LEAGUE_URL = (
-    f"https://www.transfermarkt.com/premier-league/startseite/wettbewerb/GB1"
-    f"/saison_id/{_SAISON}"
-)
+_league_cfg = LEAGUE_CONFIG[LEAGUE]
+LEAGUE_URL  = f"{BASE_URL}/{_league_cfg['url_slug']}/saison_id/{_SAISON}"
 
-_RAW_DIR = os.path.join(os.path.dirname(__file__), "..", "data", "raw")
-OUTPUT_PATH = os.path.join(_RAW_DIR, f"transfermarkt_{MODE}.csv")
+_RAW_DIR    = os.path.join(os.path.dirname(__file__), "..", "data", "raw")
+OUTPUT_PATH = os.path.join(
+    _RAW_DIR, f"transfermarkt_{_league_cfg['output_suffix']}_{MODE}.csv"
+)
 
 HEADERS = {
     "User-Agent": (
@@ -97,163 +105,89 @@ def contract_months_remaining(expiry_str: str) -> Optional[int]:
 
 def _extract_contract_months(soup: BeautifulSoup, player_name: str) -> Optional[int]:
     """
-    Parse contract months remaining from a profile page soup object.
-    (Logic extracted from the original get_contract_expiry.)
+    Parse contract months remaining from a Transfermarkt profile page.
+
+    Three strategies, tried in order:
+      1. Regex on full page text for "Contract expires: DD/MM/YYYY" (and German equiv)
+      2. Table row scan: label cell contains "contract"/"vertrag", value cell has date
+      3. DOM sibling scan: element whose text contains "expires" → next sibling date
     """
-    page_text = soup.get_text(" ", strip=True)
+    text = soup.get_text(" ", strip=True)
+    now  = datetime.today()
 
-    date_patterns = [
-        r'\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\w*\s+\d{1,2},?\s+\d{4}\b',
-        r'\b\d{2}\.\d{2}\.\d{4}\b',
-    ]
+    def _months(expiry: datetime) -> int:
+        return max(0, (expiry.year - now.year) * 12 + (expiry.month - now.month))
 
-    today = date.today()
-    future_dates = []  # list of (date_obj, raw_string)
-
-    for pattern in date_patterns:
-        for raw in re.findall(pattern, page_text) if "(" not in pattern else [
-            m.group() for m in re.finditer(pattern, page_text)
-        ]:
-            if isinstance(raw, tuple):
-                raw = " ".join(raw).strip()
-            raw = raw.strip()
+    def _try_parse(date_str: str, fmts: List[str]) -> Optional[datetime]:
+        for fmt in fmts:
             try:
-                parsed = dateutil_parser.parse(raw, dayfirst=False).date()
-            except (ValueError, OverflowError):
+                return datetime.strptime(date_str, fmt)
+            except ValueError:
                 continue
-            if parsed > today:
-                future_dates.append((parsed, raw))
-
-    for m in re.finditer(date_patterns[0], page_text):
-        raw = m.group().strip()
-        try:
-            parsed = dateutil_parser.parse(raw, dayfirst=False).date()
-        except (ValueError, OverflowError):
-            continue
-        if parsed > today and (parsed, raw) not in future_dates:
-            future_dates.append((parsed, raw))
-
-    if not future_dates:
         return None
 
-    june_30 = [item for item in future_dates if item[0].month == 6 and item[0].day == 30]
-    chosen_date, chosen_raw = (
-        min(june_30, key=lambda x: x[0]) if june_30
-        else min(future_dates, key=lambda x: x[0])
-    )
+    # ── Strategy 1: "Contract expires" / "Vertragsende" in page text ─────────
+    label_patterns = [
+        (r'Contract expires[:\s]+(\d{1,2}/\d{2}/\d{4})', ['%d/%m/%Y']),
+        (r'Contract expires[:\s]+(\d{1,2}/\d{4})',        ['%m/%Y']),
+        (r'Vertragsende[:\s]+(\d{1,2}\.\d{2}\.\d{4})',    ['%d.%m.%Y']),
+        (r'Vertragsende[:\s]+(\d{2}/\d{4})',               ['%m/%Y']),
+    ]
+    for pattern, fmts in label_patterns:
+        m = re.search(pattern, text, re.IGNORECASE)
+        if m:
+            expiry = _try_parse(m.group(1), fmts)
+            if expiry:
+                result = _months(expiry)
+                print(f"    [CONTRACT] {player_name}: '{m.group(0)}' → {result} months")
+                return result
 
-    months = (
-        (chosen_date.year - today.year) * 12
-        + (chosen_date.month - today.month)
-    )
-    result = max(months, 0)
-
-    global _contract_debug_count
-    if _contract_debug_count < 3:
-        print(f"    [CONTRACT DEBUG] {player_name}: raw='{chosen_raw}' → {result} months")
-        _contract_debug_count += 1
-
-    return result
-
-
-def _extract_historical_mv(soup: BeautifulSoup, player_name: str) -> Optional[float]:
-    """
-    Extract the market value closest to 2025-06-01 from a profile page soup.
-
-    Approach 1 — Highcharts script tag: looks for [[timestamp_ms, value], ...]
-                 arrays embedded as JavaScript in <script> tags.
-    Approach 2 — marktwert table: parses any table with class containing
-                 "marktwert" for date + value rows.
-
-    Returns value in EUR as float, or None if nothing found within 12 months
-    of the target date (2025-06-01).
-    """
-    target = _TARGET_DATE_2425
-    best_value = None
-    best_delta = float("inf")
-
-    # ── Approach 1: Highcharts [[timestamp, value], ...] in script tags ──────
-    for script in soup.find_all("script"):
-        text = script.string or ""
-        if not text:
+    # ── Strategy 2: <tr> scan — label cell + value cell ──────────────────────
+    for row in soup.find_all("tr"):
+        cells = row.find_all("td")
+        if len(cells) < 2:
             continue
-        # Only bother with scripts that contain market-value-like content
-        if "series" not in text and "data" not in text:
+        label = cells[0].get_text(strip=True).lower()
+        if not any(kw in label for kw in ("contract", "vertrag", "expires")):
             continue
-
-        # Match [timestamp_ms, value] pairs — timestamp is 13 digits,
-        # value is a plain integer (euros, no decimals on TM)
-        pairs = re.findall(r'\[(\d{10,13}),\s*(\d+)\]', text)
-        for ts_str, val_str in pairs:
-            ts = int(ts_str)
-            # Timestamps > 10^10 are milliseconds; otherwise seconds
-            ts_sec = ts / 1000.0 if ts > 10_000_000_000 else float(ts)
+        value = cells[1].get_text(strip=True)
+        m = re.search(r'(\d{1,2})[/.](\d{2})[/.](\d{4})', value)
+        if m:
             try:
-                val_date = datetime.utcfromtimestamp(ts_sec).date()
-            except (ValueError, OSError, OverflowError):
+                expiry = datetime(int(m.group(3)), int(m.group(2)), int(m.group(1)))
+                result = _months(expiry)
+                print(f"    [CONTRACT] {player_name}: row '{value}' → {result} months")
+                return result
+            except ValueError:
                 continue
-            delta = abs((val_date - target).days)
-            if delta < best_delta:
-                best_delta = delta
-                best_value = float(val_str)
 
-    if best_value is not None and best_delta <= _MV_WINDOW_DAYS:
-        return best_value
-
-    # Reset for approach 2
-    best_value = None
-    best_delta = float("inf")
-
-    # ── Approach 2: marktwert table (sometimes present on profile page) ───────
-    mv_table = soup.find("table", class_=re.compile(r"marktwert", re.I))
-    if mv_table:
-        for row in mv_table.find_all("tr"):
-            cells = row.find_all("td")
-            if len(cells) < 2:
+    # ── Strategy 3: element containing "expires" → next sibling date ─────────
+    for el in soup.find_all(["span", "td", "div", "li"]):
+        if "expires" not in el.get_text(strip=True).lower():
+            continue
+        for sibling in list(el.next_siblings)[:5]:
+            if not hasattr(sibling, "get_text"):
                 continue
-            # Date is usually in the first cell
-            date_text = cells[0].get_text(strip=True)
-            try:
-                row_date = dateutil_parser.parse(date_text, dayfirst=True).date()
-            except (ValueError, OverflowError):
-                continue
-            # Value may be in any cell containing '€'
-            val = None
-            for cell in cells:
-                cell_text = cell.get_text(strip=True)
-                if "€" in cell_text:
-                    val = parse_market_value(cell_text)
-                    if val is not None:
-                        break
-            if val is None:
-                continue
-            delta = abs((row_date - target).days)
-            if delta < best_delta:
-                best_delta = delta
-                best_value = val
-
-    if best_value is not None and best_delta <= _MV_WINDOW_DAYS:
-        return best_value
+            val = sibling.get_text(strip=True)
+            m = re.search(r'(\d{1,2})/(\d{2})/(\d{4})', val)
+            if m:
+                try:
+                    expiry = datetime(int(m.group(3)), int(m.group(2)), int(m.group(1)))
+                    result = _months(expiry)
+                    print(f"    [CONTRACT] {player_name}: sibling '{val}' → {result} months")
+                    return result
+                except ValueError:
+                    continue
 
     return None
 
 
-def get_profile_data(
+def get_contract_expiry(
     session: requests.Session,
     player_id: int,
     player_name: str,
-) -> Tuple[Optional[int], Optional[float]]:
-    """
-    Fetch the player's profile page once and return:
-      (contract_months_remaining, market_value_eur)
-
-    In MODE == "2025-26": market_value_eur is always None
-      (live value comes from the squad page instead).
-    In MODE == "2024-25": market_value_eur is the historical value
-      closest to 2025-06-01, or None if not found.
-
-    URL: https://www.transfermarkt.com/spieler/profil/spieler/{player_id}
-    """
+) -> Optional[int]:
+    """Fetch the player's profile page and return contract months remaining."""
     url = f"{BASE_URL}/spieler/profil/spieler/{player_id}"
     time.sleep(random.uniform(1, 2))
 
@@ -262,31 +196,10 @@ def get_profile_data(
         resp.raise_for_status()
     except requests.RequestException as e:
         print(f"    WARNING: Profile fetch failed for {player_name}: {e}")
-        return None, None
+        return None
 
     soup = BeautifulSoup(resp.content, "html.parser")
-
-    contract_months = _extract_contract_months(soup, player_name)
-
-    market_value = None
-    if MODE == "2024-25":
-        market_value = _extract_historical_mv(soup, player_name)
-        if market_value is not None:
-            print(f"    Market value (Jun 2025): €{market_value / 1_000_000:.1f}m")
-        else:
-            print(f"    WARNING: No historical value found for {player_name}")
-
-    return contract_months, market_value
-
-
-def get_contract_expiry(
-    session: requests.Session,
-    player_id: int,
-    player_name: str,
-) -> Optional[int]:
-    """Thin wrapper — fetches profile page and returns contract months only."""
-    contract_months, _ = get_profile_data(session, player_id, player_name)
-    return contract_months
+    return _extract_contract_months(soup, player_name)
 
 
 def get_club_urls(session: requests.Session) -> List[dict]:
@@ -444,27 +357,25 @@ def scrape_club_players(
                 nationality = flag_img.get("title", "") or flag_img.get("alt", "")
             player["nationality"] = nationality
 
-            # ── Market value + contract — fetched from player profile page ──
-            if player_id is not None:
-                contract_months, hist_mv = get_profile_data(
-                    session, player_id, player["player_name"]
+            # ── Market value — live from squad page ──
+            market_value_raw = ""
+            for cell in cells:
+                text = cell.get_text(strip=True)
+                if "€" in text:
+                    market_value_raw = text
+            player["market_value_eur"] = parse_market_value(market_value_raw)
+
+            # ── Contract expiry ───────────────────────────────────────
+            # In 2025-26 mode the contract date is JS-rendered and not
+            # reliably parseable from static HTML.  Skip the profile
+            # fetch entirely; clean.py will fill with the median.
+            if MODE == "2025-26":
+                player["contract_months_remaining"] = None
+            else:
+                player["contract_months_remaining"] = (
+                    get_contract_expiry(session, player_id, player["player_name"])
+                    if player_id is not None else None
                 )
-            else:
-                contract_months, hist_mv = None, None
-
-            player["contract_months_remaining"] = contract_months
-
-            if MODE == "2024-25":
-                # Use historical value extracted from the profile page
-                player["market_value_eur"] = hist_mv
-            else:
-                # MODE == "2025-26": scrape live value from the squad page
-                market_value_raw = ""
-                for cell in cells:
-                    text = cell.get_text(strip=True)
-                    if "€" in text:
-                        market_value_raw = text
-                player["market_value_eur"] = parse_market_value(market_value_raw)
 
             players.append(player)
 
@@ -481,15 +392,14 @@ def scrape_club_players(
     return players
 
 
-def debug_profile_page(session: requests.Session) -> None:
+def debug_contract_parsing(session: requests.Session) -> None:
     """
-    Fetch Josko Gvardiol's profile page (ID 314558) and print diagnostic
-    info to help debug why historical market value extraction returns nothing.
-    Exits after printing — remove the call from main() once fixed.
+    Fetch Upamecano's profile page and print diagnostic info to fix
+    contract date parsing. Exits after printing.
     """
-    url = "https://www.transfermarkt.com/spieler/profil/spieler/314558"
+    url = f"{BASE_URL}/spieler/profil/spieler/346532"
     print("=" * 60)
-    print("DEBUG: Fetching Gvardiol profile page")
+    print("DEBUG: Contract parsing — Upamecano (346532)")
     print(f"  URL: {url}")
     print("=" * 60)
 
@@ -500,99 +410,47 @@ def debug_profile_page(session: requests.Session) -> None:
         print(f"  FETCH FAILED: {e}")
         raise SystemExit(1)
 
-    page_source = resp.text
     soup = BeautifulSoup(resp.content, "html.parser")
-    print(f"  Page fetched OK — {len(page_source)} chars\n")
+    page_text = soup.get_text(" ", strip=True)
 
-    # ── 1. Script tags containing market-value-related keywords ──────────────
-    keywords = ["market", "value", "serie", "datum", "marktwert", "highcharts"]
-    print("-" * 60)
-    print("1. Script tags containing keywords:", keywords)
-    matching_scripts = []
-    for script in soup.find_all("script"):
-        text = script.string or ""
-        if any(kw in text.lower() for kw in keywords):
-            matching_scripts.append(text)
+    # 1. First 3000 chars of page text
+    print("\n--- 1. Page text (first 3000 chars) ---")
+    print(page_text[:3000])
 
-    print(f"   Found {len(matching_scripts)} matching script tag(s).\n")
-    for i, text in enumerate(matching_scripts, 1):
-        print(f"   --- Script #{i} (first 500 chars) ---")
-        print(text[:500])
-        print()
+    # 2. <td> elements containing "Contract", "contract", or "Vertrag"
+    print("\n--- 2. <td> elements with contract/Vertrag text ---")
+    found = False
+    for td in soup.find_all("td"):
+        text = td.get_text(strip=True)
+        if any(kw in text for kw in ("Contract", "contract", "Vertrag", "vertrag")):
+            print(f"  [{td.get('class', '')}] {text[:200]}")
+            found = True
+    if not found:
+        print("  (none found)")
 
-    # ── 2. Elements with market-value-related class names ────────────────────
-    print("-" * 60)
-    print("2. Elements with market-value-related classes:")
-    target_classes = ["marktwert-liste", "market-value", "tm-player-market-value"]
-    for cls in target_classes:
-        els = soup.find_all(class_=re.compile(cls, re.I))
-        print(f"   class~='{cls}': {len(els)} element(s)")
-        for el in els[:3]:
-            print(f"     [{el.name}] {el.get_text(strip=True)[:200]}")
-    print()
+    # 3. Elements with class containing "contract" or "vertrag"
+    print("\n--- 3. Elements with class~=contract/vertrag ---")
+    found = False
+    for el in soup.find_all(class_=re.compile(r"contract|vertrag", re.I)):
+        print(f"  <{el.name} class={el.get('class')}> {el.get_text(strip=True)[:200]}")
+        found = True
+    if not found:
+        print("  (none found)")
 
-    # ── 3. All table elements and their class names ───────────────────────────
-    print("-" * 60)
-    print("3. All <table> elements and their classes:")
-    tables = soup.find_all("table")
-    print(f"   Found {len(tables)} table(s).")
-    for i, tbl in enumerate(tables, 1):
-        cls = tbl.get("class", [])
-        print(f"   Table #{i}: class={cls}")
-    print()
+    # 4. Date patterns in full page text
+    print("\n--- 4. Date patterns found in page text ---")
+    dates = re.findall(
+        r'\d{1,2}/\d{4}|\w+ \d{4}|\d{4}-\d{2}-\d{2}|\d{2}\.\d{2}\.\d{4}',
+        page_text,
+    )
+    print("  Date patterns:", dates[:20])
 
-    # ── 4. Raw [timestamp13digit, value] pairs in page source ─────────────────
-    print("-" * 60)
-    print("4. re.findall(r'\\[\\d{13},\\d+\\]', page_source) — first 10:")
-    pairs_13 = re.findall(r'\[\d{13},\d+\]', page_source)
-    if pairs_13:
-        for p in pairs_13[:10]:
-            print(f"   {p}")
-    else:
-        print("   (none found)")
-    print()
+    # 5. Run current _extract_contract_months and show result
+    print("\n--- 5. _extract_contract_months result ---")
+    result = _extract_contract_months(soup, "Upamecano")
+    print(f"  contract_months_remaining = {result}")
 
-    # ── 4b. Also try 10-digit timestamps ──────────────────────────────────────
-    print("4b. re.findall(r'\\[\\d{10},\\d+\\]', page_source) — first 10:")
-    pairs_10 = re.findall(r'\[\d{10},\d+\]', page_source)
-    if pairs_10:
-        for p in pairs_10[:10]:
-            print(f"   {p}")
-    else:
-        print("   (none found)")
-    print()
-
-    # ── 4c. The broader pattern used by _extract_historical_mv ───────────────
-    print("4c. re.findall(r'\\[(\\d{10,13}),\\s*(\\d+)\\]', page_source) — first 10:")
-    pairs_broad = re.findall(r'\[(\d{10,13}),\s*(\d+)\]', page_source)
-    if pairs_broad:
-        for ts, val in pairs_broad[:10]:
-            print(f"   [{ts}, {val}]")
-    else:
-        print("   (none found)")
-    print()
-
-    # ── 5. "y": value pairs ───────────────────────────────────────────────────
-    print("-" * 60)
-    print('5. re.findall(r\'"y":\\d+\', page_source) — first 10:')
-    y_vals = re.findall(r'"y":\d+', page_source)
-    if y_vals:
-        for v in y_vals[:10]:
-            print(f"   {v}")
-    else:
-        print("   (none found)")
-    print()
-
-    # ── Bonus: look for any large integer that looks like a euro amount ────────
-    print("-" * 60)
-    print("Bonus: any 5-8 digit integers near 'value' or 'marktwert' in scripts:")
-    for i, text in enumerate(matching_scripts, 1):
-        amounts = re.findall(r'\b(\d{5,8})\b', text)
-        if amounts:
-            print(f"   Script #{i}: {amounts[:20]}")
-    print()
-
-    print("=" * 60)
+    print("\n" + "=" * 60)
     print("DEBUG COMPLETE — exiting.")
     print("=" * 60)
     raise SystemExit(0)
@@ -605,10 +463,14 @@ def main() -> None:
     all_players: List[dict] = []
 
     print("=" * 60)
-    print(f"Transfermarkt Scraper — Premier League  [{MODE}]")
+    print(f"Transfermarkt Scraper — {_league_cfg['name']}  [{MODE}]")
+    print(f"League URL: {LEAGUE_URL}")
+    print(f"Output:     {OUTPUT_PATH}")
     print("=" * 60)
 
-    debug_profile_page(session)   # ← remove after debugging
+    if MODE == "2025-26":
+        print("Note: contract months not scraped (JS-rendered) — "
+              "pipeline will fill with median.")
 
     clubs = get_club_urls(session)
     if not clubs:

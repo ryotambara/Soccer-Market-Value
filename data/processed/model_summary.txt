@@ -4,7 +4,7 @@ Dep. Variable:       log_market_value   R-squared:                       0.930
 Model:                            OLS   Adj. R-squared:                  0.845
 Method:                 Least Squares   F-statistic:                     11.01
 Date:                Fri, 20 Mar 2026   Prob (F-statistic):           4.86e-42
-Time:                        16:19:20   Log-Likelihood:                -7.6852
+Time:                        16:31:17   Log-Likelihood:                -7.6852
 No. Observations:                 331   AIC:                             377.4
 Df Residuals:                     150   BIC:                             1066.
 Df Model:                         180                                         
