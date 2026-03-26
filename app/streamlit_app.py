@@ -1593,5 +1593,4 @@ def main():
         page_nat_pos(results_df, coefs_by_ls)
 
 
-if __name__ == "__main__":
-    main()
+main()
