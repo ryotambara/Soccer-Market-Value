@@ -35,7 +35,6 @@ _AGE_POSITIONS = ["striker", "winger", "attmid", "cm", "cdm", "fullback", "cb", 
 
 INDEPENDENT_VARS = [
     "minutes_played",
-    "contract_months_remaining",
     # Team tier dummies (baseline = mid table, positions 7-14)
     "is_top4",
     "is_top6",

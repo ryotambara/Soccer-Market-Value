@@ -41,7 +41,6 @@ _AGE_POSITIONS = ["striker", "winger", "attmid", "cm", "cdm", "fullback", "cb", 
 
 INDEPENDENT_VARS = [
     "minutes_played",
-    "contract_months_remaining",
     # Team tier (baseline = mid table, positions 7-12)
     "is_top4",
     "is_top6",
@@ -383,7 +382,6 @@ def main():
             ("is_argentinian",   "Argentinian"),
             ("is_brazilian",     "Brazilian"),
             ("is_german",        "German"),
-            ("contract_months_remaining", "Contract months"),
             ("rating",           "WhoScored rating"),
             ("minutes_played",   "Minutes played"),
         ]

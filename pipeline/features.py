@@ -276,7 +276,7 @@ def main():
         "age", "age_squared", "market_value_eur", "log_market_value",
         "minutes_played", "goals", "assists",
         "goals_per_90", "assists_per_90",
-        "contract_months_remaining", "team_league_position",
+        "team_league_position",
         "is_top4", "is_top6", "is_bottom6", "is_historic_top6", "is_promoted",
     ]
     dummy_cols = expected_position_dummies + expected_nationality_dummies
@@ -293,7 +293,7 @@ def main():
 
     # Drop rows where essential modelling inputs are null
     essential = ["age", "log_market_value", "minutes_played", "goals_per_90",
-                 "assists_per_90", "contract_months_remaining"]
+                 "assists_per_90"]
     before = len(df)
     df = df.dropna(subset=essential)
     dropped = before - len(df)

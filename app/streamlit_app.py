@@ -16,27 +16,50 @@ import statsmodels.api as sm
 import streamlit as st
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
-_BASE_DIR     = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-_PROC_PL_2526 = os.path.join(_BASE_DIR, "data", "processed", "premier_league", "2025-26")
-_PROC_PL_2425 = os.path.join(_BASE_DIR, "data", "processed", "premier_league", "2024-25")
-_PROC_BL_2526 = os.path.join(_BASE_DIR, "data", "processed", "bundesliga", "2025-26")
+_BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_PROC     = os.path.join(_BASE_DIR, "data", "processed")
 
-RESULTS_PATH  = os.path.join(_PROC_PL_2526, "results.csv")
-FEATURES_PATH = os.path.join(_PROC_PL_2526, "features.csv")
-COEF_PATH     = os.path.join(_PROC_PL_2526, "model_coefficients.json")
+def _p(subdir, season, filename):
+    return os.path.join(_PROC, subdir, season, filename)
 
-RESULTS_2425_PATH  = os.path.join(_PROC_PL_2425, "results.csv")
-FEATURES_2425_PATH = os.path.join(_PROC_PL_2425, "features.csv")
-COEF_2425_PATH     = os.path.join(_PROC_PL_2425, "model_coefficients.json")
+# All dataset specs: (league display name, season, processed subdir)
+_DATASET_SPECS = [
+    ("Premier League", "2025-26",  "premier_league"),
+    ("Premier League", "2024-25",  "premier_league"),
+    ("Bundesliga",     "2025-26",  "bundesliga"),
+    ("Bundesliga",     "2024-25",  "bundesliga"),
+    ("La Liga",        "2024-25",  "la_liga"),
+    ("Serie A",        "2024-25",  "serie_a"),
+    ("Liga Portugal",  "2024-25",  "liga_portugal"),
+]
 
-RESULTS_BL_PATH  = os.path.join(_PROC_BL_2526, "results.csv")
-FEATURES_BL_PATH = os.path.join(_PROC_BL_2526, "features.csv")
-COEF_BL_PATH     = os.path.join(_PROC_BL_2526, "model_coefficients.json")
+# Legacy single-path constants kept for backwards compat in any direct references
+_PROC_PL_2526 = _p("premier_league", "2025-26", "")
+RESULTS_PATH  = _p("premier_league", "2025-26", "results.csv")
+COEF_PATH     = _p("premier_league", "2025-26", "model_coefficients.json")
+AGE_MEAN_PATH = _p("premier_league", "2025-26", "age_mean.json")
 
 # ── Colours ───────────────────────────────────────────────────────────────────
-AMBER = "#f0a500"
-BLUE  = "#5c9be0"
-GREEN = "#4caf7d"
+PRIMARY    = "#38003C"
+SECONDARY  = "#00FF85"
+TERTIARY   = "#04F5FF"
+# Valuation badge colours
+AMBER = "#f59e0b"   # overvalued
+BLUE  = "#04F5FF"   # undervalued
+GREEN = "#00FF85"   # fairly valued
+
+# Per-league colours for histogram / charts
+_LEAGUE_HIST_COLORS = {
+    "PL 2025-26":         "#3b82f6",
+    "PL 2024-25":         "#10b981",
+    "Bundesliga 2025-26": "#f59e0b",
+    "Bundesliga 2024-25": "#fb923c",
+    "La Liga":            "#ec4899",
+    "Serie A":            "#8b5cf6",
+    "Liga Portugal":      "#06b6d4",
+    "Premier League":     "#3b82f6",  # fallback
+    "Bundesliga":         "#f59e0b",
+}
 
 # ── Data loading ───────────────────────────────────────────────────────────────
 
@@ -49,14 +72,28 @@ def _load_coef_file(path):
 
 
 @st.cache_data
+def _load_age_mean_file(path):
+    if not os.path.exists(path):
+        return 26.0
+    with open(path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    return float(data.get("age_mean", 26.0))
+
+
+def _get_age_mean(league, season):
+    for (lg, ss, subdir) in _DATASET_SPECS:
+        if lg == league and ss == season:
+            path = _p(subdir, season, "age_mean.json")
+            if os.path.exists(path):
+                return _load_age_mean_file(path)
+    return 26.0
+
+
+@st.cache_data
 def load_all_results():
-    specs = [
-        (RESULTS_PATH,      "Premier League", "2025-26"),
-        (RESULTS_2425_PATH, "Premier League", "2024-25"),
-        (RESULTS_BL_PATH,   "Bundesliga",     "2025-26"),
-    ]
     parts = []
-    for path, league, season in specs:
+    for league, season, subdir in _DATASET_SPECS:
+        path = _p(subdir, season, "results.csv")
         if not os.path.exists(path):
             continue
         df = pd.read_csv(path, encoding="utf-8")
@@ -71,8 +108,8 @@ def load_all_results():
         return pd.DataFrame()
     combined = pd.concat(parts, ignore_index=True, sort=False).copy()
     combined["percentile"] = (
-        combined.groupby(["league", "season"])["residual"]
-        .rank(pct=True, ascending=False)
+        combined.groupby(["league", "season"])["predicted_market_value_eur"]
+        .rank(pct=True)
         .mul(100).round(0).astype(int)
     )
     return combined
@@ -80,13 +117,9 @@ def load_all_results():
 
 @st.cache_data
 def load_all_features():
-    specs = [
-        (FEATURES_PATH,      "Premier League", "2025-26"),
-        (FEATURES_2425_PATH, "Premier League", "2024-25"),
-        (FEATURES_BL_PATH,   "Bundesliga",     "2025-26"),
-    ]
     parts = []
-    for path, league, season in specs:
+    for league, season, subdir in _DATASET_SPECS:
+        path = _p(subdir, season, "features.csv")
         if not os.path.exists(path):
             continue
         df = pd.read_csv(path, encoding="utf-8")
@@ -247,8 +280,17 @@ _WI_DISCIPLINE = [
     ("Fouls/g",         "fouls_per_game",        "fouls_per_game",     None,  0.0, 2.0, 0.1),
     ("Dribbled past/g", "dribbled_past_per_game","dribbled_past_per_game", None, 0.0, 2.0, 0.1),
     ("Yellow cards",    "yellow_cards",          "yellow_cards",       None,  0,   10,  1  ),
+    ("xG diff (season)","xg_diff",               "xg_diff",            None, -5.0, 5.0, 0.1),
 ]
 _ALL_WI_DEFS = _WI_ATTACKING + _WI_DEFENSIVE + _WI_PASSING + _WI_DISCIPLINE
+
+_GK_WI_DEFS = [
+    ("Save %",    "gk_save_pct",    "gk_save_pct",    None, 50.0, 100.0, 1.0 ),
+    ("CS/90",     "gk_cs_per_90",   "gk_cs_per_90",   None, 0.0,  0.6,   0.05),
+    ("GA/90",     "gk_ga_per_90",   "gk_ga_per_90",   None, 0.0,  3.0,   0.1 ),
+    ("SoTA/90",   "gk_sota_per_90", "gk_sota_per_90", None, 0.0,  6.0,   0.1 ),
+    ("PK Save %", "gk_pk_save_pct", "gk_pk_save_pct", None, 0.0,  100.0, 5.0 ),
+]
 
 
 def _coef_col(short, pp, prefix_first):
@@ -262,11 +304,14 @@ def _coef_col(short, pp, prefix_first):
 
 def _wi_slider_keys(slug):
     keys = [
+        f"wi_age_{slug}",
         f"wi_league_{slug}", f"wi_nat_{slug}",
         f"wi_contract_{slug}", f"wi_minutes_{slug}",
         f"wi_promoted_{slug}", f"wi_historic_{slug}",
     ]
     for item in _ALL_WI_DEFS:
+        keys.append(f"wi_{item[1]}_{slug}")
+    for item in _GK_WI_DEFS:
         keys.append(f"wi_{item[1]}_{slug}")
     return keys
 
@@ -311,19 +356,38 @@ def infer_pos_group(row):
 
 # ── Player Detail ──────────────────────────────────────────────────────────────
 
-def _make_wi_sliders(section_defs, player, slug):
-    """Render What-If sliders for one section; return dict raw_col → new_value."""
+def _wi_defaults(player, slug, cur_nl, league):
+    """Build a dict of session_state key → default value for every What-If widget."""
+    d = {}
+    # Context
+    d[f"wi_age_{slug}"]      = max(16, min(40, _safe_int(player.get("age"), 25)))
+    d[f"wi_league_{slug}"]   = league
+    d[f"wi_nat_{slug}"]      = cur_nl
+    d[f"wi_minutes_{slug}"]  = max(500, min(3000, _safe_int(player.get("minutes_played"), 1500)))
+    d[f"wi_promoted_{slug}"] = bool(player.get("is_promoted", 0))
+    d[f"wi_historic_{slug}"] = bool(player.get("is_historic_top6", 0))
+    # Stat sliders
+    for item in _ALL_WI_DEFS + _GK_WI_DEFS:
+        _, raw_col, _, _, min_v, max_v, step = item
+        mid = (float(min_v) + float(max_v)) / 2.0
+        cur = _safe_float(player.get(raw_col), mid)
+        cur = max(float(min_v), min(float(max_v), cur))
+        is_int = isinstance(step, int) and isinstance(min_v, int)
+        d[f"wi_{raw_col}_{slug}"] = int(round(cur)) if is_int else round(cur, 4)
+    return d
+
+
+def _make_wi_sliders(section_defs, slug):
+    """Render What-If sliders for one section (session_state drives value); return dict raw_col → value."""
     vals = {}
     for item in section_defs:
         label, raw_col, _short, _pf, min_v, max_v, step = item
-        cur = _safe_float(player.get(raw_col), (float(min_v) + float(max_v)) / 2.0)
-        cur = max(float(min_v), min(float(max_v), cur))
         key = f"wi_{raw_col}_{slug}"
         is_int = isinstance(step, int) and isinstance(min_v, int)
         if is_int:
-            vals[raw_col] = st.slider(label, int(min_v), int(max_v), int(cur), int(step), key=key)
+            vals[raw_col] = st.slider(label, int(min_v), int(max_v), step=int(step), key=key)
         else:
-            vals[raw_col] = st.slider(label, float(min_v), float(max_v), round(cur, 4), float(step), key=key)
+            vals[raw_col] = st.slider(label, float(min_v), float(max_v), step=float(step), key=key)
     return vals
 
 
@@ -401,7 +465,7 @@ def _show_player_detail(player, results_df, coefs_by_ls):
             ])
             fig.update_layout(
                 barmode="group",
-                paper_bgcolor="#0d1420", plot_bgcolor="#0d1420", font_color="#e8eaf0",
+                paper_bgcolor="#ffffff", plot_bgcolor="#F8F9FA", font_color="#111111",
                 legend=dict(orientation="h", y=1.1),
                 margin=dict(t=40, b=20), height=300,
             )
@@ -410,7 +474,7 @@ def _show_player_detail(player, results_df, coefs_by_ls):
     # ── Stats grid ──
     st.divider()
     left_stats  = ["minutes_played", "goals", "assists", "goals_per_90", "assists_per_90",
-                   "contract_months_remaining", "team_league_position"]
+                   "team_league_position"]
     right_stats = ["xg", "xg_diff", "tackles_per_game", "key_passes_per_game",
                    "pass_success_pct", "shots_per_game"]
     sc1, sc2 = st.columns(2)
@@ -435,112 +499,170 @@ def _show_player_detail(player, results_df, coefs_by_ls):
     st.divider()
     st.subheader("What-If Prediction")
 
-    if st.button("↺ Reset to player values", key=f"reset_{slug}"):
-        for k in _wi_slider_keys(slug):
-            if k in st.session_state:
-                del st.session_state[k]
-        st.rerun()
+    pp           = _POS_PREFIX_MAP.get(pos_label, "cb")
+    age_mean_val = _get_age_mean(league, season)
+    cur_nd       = infer_nat_dummy(player)
+    nat_labels   = [o[0] for o in _NAT_OPTIONS]
+    cur_nl       = next((o[0] for o in _NAT_OPTIONS if o[1] == cur_nd), "Other European")
 
-    # Base log from model's actual prediction
+    # Build defaults and initialise session_state on first load — MUST happen before any widget renders
+    defaults = _wi_defaults(player, slug, cur_nl, league)
+    for k, v in defaults.items():
+        if k not in st.session_state:
+            st.session_state[k] = v
+
+    # Reset button — sets session_state directly so next render picks up new values
+    if st.button("↺ Reset to player values", key=f"reset_{slug}"):
+        for k, v in defaults.items():
+            st.session_state[k] = v
+
+    # Base prediction — taken directly from results.csv (same source as Player Lookup table)
+    base_predicted = _safe_float(player.get("predicted_market_value_eur"), 1.0)
     if "predicted_log_value" in player.index and pd.notna(player.get("predicted_log_value")):
         base_log = _safe_float(player["predicted_log_value"])
     else:
-        base_log = np.log(max(1.0, _safe_float(predicted, 1.0)))
-
-    pp = _POS_PREFIX_MAP.get(pos_label, "cb")
+        base_log = np.log(max(1.0, base_predicted))
 
     # ── Section A: Club & Context ──
     with st.expander("Club & Context", expanded=True):
         a1, a2 = st.columns(2)
         with a1:
+            wi_age = st.slider("Age", 16, 40, step=1, key=f"wi_age_{slug}")
+
             has_bl_coef = "is_bundesliga" in coef_map
             if has_bl_coef:
                 league_opts = ["Premier League", "Bundesliga"]
-                wi_league   = st.selectbox("League", league_opts,
-                                           index=1 if league == "Bundesliga" else 0,
-                                           key=f"wi_league_{slug}")
+                wi_league   = st.selectbox("League", league_opts, key=f"wi_league_{slug}")
             else:
                 wi_league = league
-                st.caption("League toggle requires combined-model coefficients (run combined regression on Model Explorer first).")
+                st.caption("League toggle requires combined-model coefficients.")
 
-            nat_labels  = [o[0] for o in _NAT_OPTIONS]
-            cur_nd      = infer_nat_dummy(player)
-            cur_nl      = next((o[0] for o in _NAT_OPTIONS if o[1] == cur_nd), "Other European")
-            nat_idx     = nat_labels.index(cur_nl) if cur_nl in nat_labels else len(nat_labels) - 1
-            wi_nat      = st.selectbox("Nationality", nat_labels, index=nat_idx, key=f"wi_nat_{slug}")
+            wi_nat = st.selectbox("Nationality", nat_labels, key=f"wi_nat_{slug}")
 
         with a2:
-            wi_contract = st.slider("Contract months remaining", 0, 96,
-                                    max(0, min(96, _safe_int(player.get("contract_months_remaining"), 18))),
-                                    6, key=f"wi_contract_{slug}")
-            wi_minutes  = st.slider("Minutes played", 500, 3000,
-                                    max(500, min(3000, _safe_int(player.get("minutes_played"), 1500))),
-                                    100, key=f"wi_minutes_{slug}")
+            wi_minutes = st.slider("Minutes played", 500, 3000, step=100, key=f"wi_minutes_{slug}")
 
         chk1, chk2 = st.columns(2)
-        wi_promoted = chk1.checkbox("Promoted club",      value=bool(player.get("is_promoted", 0)),      key=f"wi_promoted_{slug}")
-        wi_historic = chk2.checkbox("Historic top club",  value=bool(player.get("is_historic_top6", 0)), key=f"wi_historic_{slug}")
+        wi_promoted = chk1.checkbox("Promoted club",     key=f"wi_promoted_{slug}")
+        wi_historic = chk2.checkbox("Historic top club", key=f"wi_historic_{slug}")
 
     with st.expander("Attacking", expanded=False):
-        att_vals = _make_wi_sliders(_WI_ATTACKING, player, slug)
+        att_vals = _make_wi_sliders(_WI_ATTACKING, slug)
 
     with st.expander("Defensive", expanded=False):
-        def_vals = _make_wi_sliders(_WI_DEFENSIVE, player, slug)
+        def_vals = _make_wi_sliders(_WI_DEFENSIVE, slug)
 
     with st.expander("Passing", expanded=False):
-        pass_vals = _make_wi_sliders(_WI_PASSING, player, slug)
+        pass_vals = _make_wi_sliders(_WI_PASSING, slug)
 
     with st.expander("Discipline", expanded=False):
-        disc_vals = _make_wi_sliders(_WI_DISCIPLINE, player, slug)
+        disc_vals = _make_wi_sliders(_WI_DISCIPLINE, slug)
 
-    # ── Compute delta ──
+    gk_vals = {}
+    if pos_label == "Goalkeeper":
+        with st.expander("Goalkeeper Stats", expanded=False):
+            gk_vals = _make_wi_sliders(_GK_WI_DEFS, slug)
+
+    # ── Compute delta in log space ──
     delta_log = 0.0
-    all_stat_vals = {**att_vals, **def_vals, **pass_vals, **disc_vals}
+    breakdown  = []   # (label, old_val, new_val, d_log) for changed sliders only
 
+    all_stat_vals = {**att_vals, **def_vals, **pass_vals, **disc_vals}
     for item in _ALL_WI_DEFS:
         _label, raw_col, coef_short, prefix_first, _mn, _mx, _st = item
-        wi_val  = _safe_float(all_stat_vals.get(raw_col))
-        old_val = _safe_float(player.get(raw_col))
+        mid = (float(_mn) + float(_mx)) / 2.0
+        wi_val  = _safe_float(all_stat_vals.get(raw_col), mid)
+        old_val = _safe_float(player.get(raw_col), mid)
+        old_val = max(float(_mn), min(float(_mx), old_val))
         ccol    = _coef_col(coef_short, pp, prefix_first)
-        delta_log += _safe_float(coef_map.get(ccol)) * (wi_val - old_val)
+        d       = _safe_float(coef_map.get(ccol)) * (wi_val - old_val)
+        delta_log += d
+        if abs(wi_val - old_val) > 1e-6 and abs(d) > 1e-6:
+            breakdown.append((_label, old_val, wi_val, d))
 
-    # Contract & minutes
-    delta_log += _safe_float(coef_map.get("contract_months_remaining")) * (
-        wi_contract - _safe_float(player.get("contract_months_remaining"), 18.0)
-    )
-    delta_log += _safe_float(coef_map.get("minutes_played")) * (
-        wi_minutes - _safe_float(player.get("minutes_played"), 1500.0)
-    )
+    # GK-specific (direct coefficient names, no position interaction)
+    if pos_label == "Goalkeeper":
+        for item in _GK_WI_DEFS:
+            _label, raw_col, coef_short, _, _mn, _mx, _st = item
+            mid = (float(_mn) + float(_mx)) / 2.0
+            wi_val  = _safe_float(gk_vals.get(raw_col), mid)
+            old_val = _safe_float(player.get(raw_col), mid)
+            old_val = max(float(_mn), min(float(_mx), old_val))
+            d       = _safe_float(coef_map.get(coef_short)) * (wi_val - old_val)
+            delta_log += d
+            if abs(wi_val - old_val) > 1e-6 and abs(d) > 1e-6:
+                breakdown.append((_label, old_val, wi_val, d))
+
+    old_minutes = _safe_float(player.get("minutes_played"), 1500.0)
+    d_minutes   = _safe_float(coef_map.get("minutes_played")) * (wi_minutes - old_minutes)
+    delta_log  += d_minutes
+    if abs(wi_minutes - old_minutes) > 0.5 and abs(d_minutes) > 1e-6:
+        breakdown.append(("Minutes played", old_minutes, float(wi_minutes), d_minutes))
 
     # Promoted / historic toggles
-    delta_log += _safe_float(coef_map.get("is_promoted")) * (
-        (1.0 if wi_promoted else 0.0) - _safe_float(player.get("is_promoted", 0))
-    )
-    delta_log += _safe_float(coef_map.get("is_historic_top6")) * (
-        (1.0 if wi_historic else 0.0) - _safe_float(player.get("is_historic_top6", 0))
-    )
+    old_promoted_v = _safe_float(player.get("is_promoted", 0))
+    d_promoted     = _safe_float(coef_map.get("is_promoted")) * ((1.0 if wi_promoted else 0.0) - old_promoted_v)
+    delta_log     += d_promoted
+    if abs(d_promoted) > 1e-6:
+        breakdown.append(("Promoted club", old_promoted_v, 1.0 if wi_promoted else 0.0, d_promoted))
+
+    old_historic_v = _safe_float(player.get("is_historic_top6", 0))
+    d_historic     = _safe_float(coef_map.get("is_historic_top6")) * ((1.0 if wi_historic else 0.0) - old_historic_v)
+    delta_log     += d_historic
+    if abs(d_historic) > 1e-6:
+        breakdown.append(("Historic top club", old_historic_v, 1.0 if wi_historic else 0.0, d_historic))
 
     # Nationality swap
-    new_nd      = next((o[1] for o in _NAT_OPTIONS if o[0] == wi_nat), None)
-    old_nat_c   = _safe_float(coef_map.get(cur_nd))   if cur_nd  else 0.0
-    new_nat_c   = _safe_float(coef_map.get(new_nd))   if new_nd  else 0.0
-    delta_log  += (new_nat_c - old_nat_c)
+    new_nd    = next((o[1] for o in _NAT_OPTIONS if o[0] == wi_nat), None)
+    old_nat_c = _safe_float(coef_map.get(cur_nd)) if cur_nd else 0.0
+    new_nat_c = _safe_float(coef_map.get(new_nd)) if new_nd else 0.0
+    d_nat     = new_nat_c - old_nat_c
+    delta_log += d_nat
+    if abs(d_nat) > 1e-6:
+        breakdown.append((f"Nationality ({cur_nl}→{wi_nat})", old_nat_c, new_nat_c, d_nat))
 
     # League toggle
     if "is_bundesliga" in coef_map:
         old_bl = 1.0 if league    == "Bundesliga" else 0.0
         new_bl = 1.0 if wi_league == "Bundesliga" else 0.0
-        delta_log += _safe_float(coef_map.get("is_bundesliga")) * (new_bl - old_bl)
+        d_bl   = _safe_float(coef_map.get("is_bundesliga")) * (new_bl - old_bl)
+        delta_log += d_bl
+        if abs(d_bl) > 1e-6:
+            breakdown.append(("League", old_bl, new_bl, d_bl))
+
+    # Age change — position-specific centered age coefficients
+    old_age     = _safe_float(player.get("age"), 26.0)
+    old_age_c   = old_age - age_mean_val
+    new_age_c   = float(wi_age) - age_mean_val
+    coef_age    = _safe_float(coef_map.get(f"{pp}_age"))
+    coef_age_sq = _safe_float(coef_map.get(f"{pp}_age_sq"))
+    d_age       = coef_age * (new_age_c - old_age_c) + coef_age_sq * (new_age_c ** 2 - old_age_c ** 2)
+    delta_log  += d_age
+    if abs(wi_age - old_age) > 0.5 and abs(d_age) > 1e-6:
+        breakdown.append((f"Age ({old_age:.0f}→{wi_age})", old_age, float(wi_age), d_age))
 
     wi_predicted = np.exp(base_log + delta_log)
-    wi_delta     = wi_predicted - _safe_float(predicted, 0.0)
-    pct_chg      = (np.exp(delta_log) - 1.0) * 100
+    wi_delta     = wi_predicted - base_predicted
+    pct_chg      = (wi_predicted / base_predicted - 1.0) * 100 if base_predicted > 0 else 0.0
 
+    st.caption(f"**Base prediction** (model): {fmt_eur(base_predicted)}")
     res_col1, res_col2 = st.columns(2)
     res_col1.metric("What-If Predicted Value", fmt_eur(wi_predicted),
                     delta=fmt_eur(wi_delta) if abs(wi_delta) > 500 else None)
-    res_col2.metric("Change from model prediction", f"{pct_chg:+.1f}%",
+    res_col2.metric("Change from base prediction", f"{pct_chg:+.1f}%",
                     delta=f"Δ log = {delta_log:+.4f}")
+
+    # Driver breakdown — only variables the user changed
+    if breakdown:
+        st.caption("**Driver breakdown** (only variables you changed from player defaults)")
+        bkd = pd.DataFrame(breakdown, columns=["Variable", "Old", "New", "Δ log"])
+        bkd["Δ log"] = bkd["Δ log"].round(4)
+        base_eur     = np.exp(base_log)
+        bkd["Δ €"]   = bkd["Δ log"].apply(lambda d: fmt_eur(base_eur * (np.exp(d) - 1.0)))
+        bkd["Old"]   = bkd["Old"].apply(lambda v: round(v, 3))
+        bkd["New"]   = bkd["New"].apply(lambda v: round(v, 3))
+        bkd = bkd.sort_values("Δ log", key=lambda s: s.abs(), ascending=False).reset_index(drop=True)
+        st.dataframe(bkd, width="stretch")
 
 
 # ── Page 1: Player Lookup ──────────────────────────────────────────────────────
@@ -748,7 +870,7 @@ def page_model_explorer(features_df):
                 "residual", "predicted_market_value_eur", "is_centre_back"}
 
     groups = {
-        "Demographics": ["age", "age_squared", "contract_months_remaining"],
+        "Demographics": ["age", "age_squared"],
         # rating removed — composite stat with high multicollinearity
         "Performance — Global": [
             "minutes_played", "xg_diff", "pass_success_pct",
@@ -790,6 +912,40 @@ def page_model_explorer(features_df):
         ],
     }
 
+    _POS_SLUGS = ["striker","winger","attmid","cm","cdm","fullback","cb","gk"]
+    _POS_LABELS = {
+        "striker": "Striker", "winger": "Winger", "attmid": "Att. Mid",
+        "cm": "Central Mid", "cdm": "CDM", "fullback": "Fullback",
+        "cb": "Centre-Back", "gk": "Goalkeeper",
+    }
+
+    def _var_position(var_name):
+        """Return the position slug this variable is specific to, or None if global."""
+        for p in _POS_SLUGS:
+            if var_name == f"is_{p}":
+                return p
+            if var_name.endswith(f"_{p}") and var_name != f"is_{p}":
+                return p
+            if var_name.startswith(f"{p}_"):
+                return p
+        return None
+
+    def _apply_pos_filter(pos_slug, all_group_vars):
+        """Set session_state checkboxes: select vars for pos_slug, deselect others."""
+        for v in all_group_vars:
+            if v not in features_df.columns:
+                continue
+            vp = _var_position(v)
+            if vp is None:
+                # Global var — always on
+                st.session_state[f"var_{v}"] = True
+            elif vp == pos_slug:
+                st.session_state[f"var_{v}"] = True
+            else:
+                st.session_state[f"var_{v}"] = False
+
+    all_group_vars_flat = [v for gvars in groups.values() for v in gvars]
+
     with st.sidebar:
         st.subheader("Leagues to include")
         all_leagues = sorted(features_df["league"].dropna().unique().tolist()) if "league" in features_df.columns else []
@@ -798,9 +954,33 @@ def page_model_explorer(features_df):
             n = int((features_df["league"] == lg).sum())
             league_checks[lg] = st.checkbox(f"{lg} ({n})", value=True, key=f"me_lg_{lg}")
 
+        st.subheader("Filter by position")
+        pos_options = ["All"] + _POS_SLUGS
+        pos_labels  = ["All Positions"] + [_POS_LABELS[p] for p in _POS_SLUGS]
+        pos_sel_idx = st.selectbox(
+            "Position", pos_labels, index=0, key="me_pos_sel",
+            label_visibility="collapsed",
+        )
+        chosen_pos = pos_options[pos_labels.index(pos_sel_idx)]
+
         st.subheader("Variables")
-        select_all   = st.button("Select All")
-        deselect_all = st.button("Deselect All")
+        sa_col, da_col = st.columns(2)
+        select_all   = sa_col.button("Select All")
+        deselect_all = da_col.button("Deselect All")
+
+        # Position filter: apply BEFORE checkboxes render
+        if chosen_pos != "All":
+            _apply_pos_filter(chosen_pos, all_group_vars_flat)
+
+        # Select All / Deselect All override
+        if select_all:
+            for v in all_group_vars_flat:
+                if v in features_df.columns:
+                    st.session_state[f"var_{v}"] = True
+        if deselect_all:
+            for v in all_group_vars_flat:
+                if v in features_df.columns:
+                    st.session_state[f"var_{v}"] = False
 
         selected_vars = []
         for group_name, group_vars in groups.items():
@@ -809,8 +989,7 @@ def page_model_explorer(features_df):
                 continue
             with st.expander(group_name, expanded=(group_name == "Demographics")):
                 for v in available:
-                    default = True if select_all else (False if deselect_all else True)
-                    if st.checkbox(v, value=default, key=f"var_{v}"):
+                    if st.checkbox(v, value=True, key=f"var_{v}"):
                         selected_vars.append(v)
 
     sel_league_list = [lg for lg, checked in league_checks.items() if checked]
@@ -934,17 +1113,37 @@ def page_model_explorer(features_df):
         })
         if "league" in df_m.columns:
             chart_df["league"] = df_m["league"].values
+        if "season" in df_m.columns:
+            chart_df["season"] = df_m["season"].values
+
+        # Build display label per league/season
+        if "league" in chart_df.columns and "season" in chart_df.columns:
+            def _ls_label(r):
+                lg, ss = r["league"], r["season"]
+                if lg == "Premier League":
+                    return f"PL {ss}"
+                if lg == "Bundesliga":
+                    return f"Bundesliga {ss}"
+                return lg
+            chart_df["_ls"] = chart_df.apply(_ls_label, axis=1)
+        elif "league" in chart_df.columns:
+            chart_df["_ls"] = chart_df["league"]
 
         ch1, ch2 = st.columns(2)
         with ch1:
+            has_multi = "_ls" in chart_df.columns and chart_df["_ls"].nunique() > 1
             fig_h = px.histogram(
                 chart_df, x="residual", nbins=40,
                 title="Residual Distribution",
-                color="league" if "league" in chart_df.columns else None,
-                color_discrete_sequence=[AMBER],
+                color="_ls" if has_multi else None,
+                color_discrete_map=_LEAGUE_HIST_COLORS if has_multi else None,
+                color_discrete_sequence=None if has_multi else [AMBER],
+                opacity=0.6 if has_multi else 0.8,
+                barmode="overlay" if has_multi else "relative",
+                labels={"_ls": "League/Season"},
             )
             fig_h.add_vline(x=0, line_color="white", line_dash="dash")
-            fig_h.update_layout(paper_bgcolor="#0d1420", plot_bgcolor="#0d1420", font_color="#e8eaf0")
+            fig_h.update_layout(paper_bgcolor="#ffffff", plot_bgcolor="#F8F9FA", font_color="#111111")
             st.plotly_chart(fig_h, width='stretch')
         with ch2:
             cmap = {"overvalued": AMBER, "undervalued": BLUE, "fairly valued": GREEN}
@@ -958,7 +1157,7 @@ def page_model_explorer(features_df):
             mv = max(chart_df["actual_eur"].max(), chart_df["predicted_eur"].max())
             fig_s.add_shape(type="line", x0=0, y0=0, x1=mv, y1=mv,
                             line=dict(color="white", dash="dash"))
-            fig_s.update_layout(paper_bgcolor="#0d1420", plot_bgcolor="#0d1420", font_color="#e8eaf0")
+            fig_s.update_layout(paper_bgcolor="#ffffff", plot_bgcolor="#F8F9FA", font_color="#111111")
             st.plotly_chart(fig_s, width='stretch')
 
         if "player_name" in df_m.columns:
@@ -1029,8 +1228,11 @@ def page_nat_pos(df, coefs_by_ls):
 
     with tab_nat:
         st.caption(
-            "**Market Premium %** = model's estimated % over-payment (+) or under-payment (−) "
-            "for a player from this nationality, holding all else constant. Baseline = Other Europe (0%)."
+            "**Model Coef Premium %** = regression estimate of % over/under-valuation for this "
+            "nationality, controlling for performance, age, club tier, and position (baseline = Other Europe). "
+            "**Median Residual %** = median individual residual for players in this group × 100 "
+            "(positive = typically over-priced vs model; negative = typically under-priced). "
+            "Note: mean residual is always 0 by OLS construction when group dummies are included."
         )
         if len(sel_leagues) > 1:
             st.info(
@@ -1044,28 +1246,29 @@ def page_nat_pos(df, coefs_by_ls):
                 continue
             dummy    = _nat_dummy_for.get(grp_name)
             raw_coef = _safe_float(coef_map.get(dummy)) if dummy else 0.0
-            mkt_pct  = _dummy_to_pct(raw_coef)
+            coef_pct = _dummy_to_pct(raw_coef)
+            ov_idx   = grp["residual"].idxmax()
+            uv_idx   = grp["residual"].idxmin()
             nat_agg.append({
-                "Nationality":      grp_name,
-                "Players":          len(grp),
-                "Market Premium %": mkt_pct,
-                "Model Coef (log)": round(raw_coef, 4),
-                "Avg Actual €M":    round(grp["market_value_eur"].mean() / 1e6, 2),
-                "Avg Predicted €M": round(grp["predicted_market_value_eur"].mean() / 1e6, 2),
-                "Most Overvalued":  grp.loc[grp["residual"].idxmax(), player_col],
-                "Most Undervalued": grp.loc[grp["residual"].idxmin(), player_col],
-                "_pct":             mkt_pct,
+                "Nationality":           grp_name,
+                "Players":               len(grp),
+                "Model Coef Premium %":  coef_pct,
+                "Median Residual %":     round(float(grp["residual"].median()) * 100, 1),
+                "Model Coef (log)":      round(raw_coef, 4),
+                "Most Overvalued":       grp.loc[ov_idx, player_col],
+                "Most Undervalued":      grp.loc[uv_idx, player_col],
+                "_pct":                  coef_pct,
             })
-        nat_df = pd.DataFrame(nat_agg).sort_values("Market Premium %", ascending=False)
+        nat_df = pd.DataFrame(nat_agg).sort_values("Model Coef Premium %", ascending=False)
 
         fig_nat = px.bar(
-            nat_df, x="Nationality", y="Market Premium %",
-            title="Model-Estimated Market Premium/Discount by Nationality",
-            color="Market Premium %",
-            color_continuous_scale=[[0, BLUE], [0.5, "#888"], [1, AMBER]],
+            nat_df, x="Nationality", y="Model Coef Premium %",
+            title="Model-Estimated Market Premium/Discount by Nationality (controlling all else)",
+            color="Model Coef Premium %",
+            color_continuous_scale=[[0, TERTIARY], [0.5, "#aaa"], [1, AMBER]],
         )
         fig_nat.update_layout(
-            paper_bgcolor="#0d1420", plot_bgcolor="#0d1420", font_color="#e8eaf0",
+            paper_bgcolor="#ffffff", plot_bgcolor="#F8F9FA", font_color="#111111",
             coloraxis_showscale=False, xaxis_tickangle=-30,
         )
         fig_nat.add_hline(y=0, line_color="white", line_dash="dash", opacity=0.4)
@@ -1078,8 +1281,9 @@ def page_nat_pos(df, coefs_by_ls):
 
     with tab_pos:
         st.caption(
-            "**Market Premium %** = model's estimated % over-payment (+) or under-payment (−) "
-            "for a player in this position, holding all else constant. Baseline = Centre-Back (0%)."
+            "**Model Coef Premium %** = model's estimated % over-payment (+) or under-payment (−) "
+            "for a player in this position, holding all else constant. Baseline = Centre-Back (0%). "
+            "**Median Residual %** = median individual residual × 100 (positive = typically over-priced vs model)."
         )
         hist_coef = coef_map.get("is_historic_top6")
         hist_pval = (coefs.get("pvalues", {}) or {}).get("is_historic_top6") if coefs else None
@@ -1097,28 +1301,29 @@ def page_nat_pos(df, coefs_by_ls):
                 continue
             dummy    = _pos_dummy_for.get(grp_name)
             raw_coef = _safe_float(coef_map.get(dummy)) if dummy else 0.0
-            mkt_pct  = _dummy_to_pct(raw_coef)
+            coef_pct = _dummy_to_pct(raw_coef)
+            ov_idx   = grp["residual"].idxmax()
+            uv_idx   = grp["residual"].idxmin()
             pos_agg.append({
-                "Position":         grp_name,
-                "Players":          len(grp),
-                "Market Premium %": mkt_pct,
-                "Model Coef (log)": round(raw_coef, 4),
-                "Avg Actual €M":    round(grp["market_value_eur"].mean() / 1e6, 2),
-                "Avg Predicted €M": round(grp["predicted_market_value_eur"].mean() / 1e6, 2),
-                "Most Overvalued":  grp.loc[grp["residual"].idxmax(), player_col],
-                "Most Undervalued": grp.loc[grp["residual"].idxmin(), player_col],
-                "_pct":             mkt_pct,
+                "Position":             grp_name,
+                "Players":              len(grp),
+                "Model Coef Premium %": coef_pct,
+                "Median Residual %":    round(float(grp["residual"].median()) * 100, 1),
+                "Model Coef (log)":     round(raw_coef, 4),
+                "Most Overvalued":      grp.loc[ov_idx, player_col],
+                "Most Undervalued":     grp.loc[uv_idx, player_col],
+                "_pct":                 coef_pct,
             })
-        pos_df = pd.DataFrame(pos_agg).sort_values("Market Premium %", ascending=False)
+        pos_df = pd.DataFrame(pos_agg).sort_values("Model Coef Premium %", ascending=False)
 
         fig_pos = px.bar(
-            pos_df, x="Position", y="Market Premium %",
-            title="Model-Estimated Market Premium/Discount by Position",
-            color="Market Premium %",
-            color_continuous_scale=[[0, BLUE], [0.5, "#888"], [1, AMBER]],
+            pos_df, x="Position", y="Model Coef Premium %",
+            title="Model-Estimated Market Premium/Discount by Position (controlling all else)",
+            color="Model Coef Premium %",
+            color_continuous_scale=[[0, TERTIARY], [0.5, "#aaa"], [1, AMBER]],
         )
         fig_pos.update_layout(
-            paper_bgcolor="#0d1420", plot_bgcolor="#0d1420", font_color="#e8eaf0",
+            paper_bgcolor="#ffffff", plot_bgcolor="#F8F9FA", font_color="#111111",
             coloraxis_showscale=False,
         )
         fig_pos.add_hline(y=0, line_color="white", line_dash="dash", opacity=0.4)
@@ -1132,7 +1337,7 @@ def page_nat_pos(df, coefs_by_ls):
                 hover_data=[player_col], opacity=0.7,
             )
             fig_xg.add_hline(y=0, line_color="white", line_dash="dash", opacity=0.4)
-            fig_xg.update_layout(paper_bgcolor="#0d1420", plot_bgcolor="#0d1420", font_color="#e8eaf0")
+            fig_xg.update_layout(paper_bgcolor="#ffffff", plot_bgcolor="#F8F9FA", font_color="#111111")
             st.plotly_chart(fig_xg, width='stretch')
 
         if "rating" in df_view.columns:
@@ -1142,7 +1347,7 @@ def page_nat_pos(df, coefs_by_ls):
                 hover_data=[player_col], opacity=0.7,
             )
             fig_rat.add_hline(y=0, line_color="white", line_dash="dash", opacity=0.4)
-            fig_rat.update_layout(paper_bgcolor="#0d1420", plot_bgcolor="#0d1420", font_color="#e8eaf0")
+            fig_rat.update_layout(paper_bgcolor="#ffffff", plot_bgcolor="#F8F9FA", font_color="#111111")
             st.plotly_chart(fig_rat, width='stretch')
 
         for _, row in pos_df.iterrows():
@@ -1153,12 +1358,204 @@ def page_nat_pos(df, coefs_by_ls):
 
 # ── Main ───────────────────────────────────────────────────────────────────────
 
+_CSS = """
+<style>
+/* ── Scrollbar ─────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: #f0f0f0; }
+::-webkit-scrollbar-thumb { background: #38003C; border-radius: 4px; }
+
+/* ── Root background & font ─────────────────────────────────── */
+html, body, [data-testid="stAppViewContainer"] {
+    background-color: #F8F9FA;
+    color: #111111;
+    font-family: 'Inter', 'Helvetica Neue', sans-serif;
+}
+
+/* ── Sidebar ─────────────────────────────────────────────────── */
+[data-testid="stSidebar"] {
+    background-color: #38003C;
+    border-right: 2px solid #00FF85;
+}
+[data-testid="stSidebar"] * {
+    color: #F8F9FA !important;
+}
+[data-testid="stSidebar"] .stRadio label,
+[data-testid="stSidebar"] .stCheckbox label,
+[data-testid="stSidebar"] .stSelectbox label {
+    color: #F8F9FA !important;
+    font-size: 0.85rem;
+}
+[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] h2 {
+    color: #00FF85 !important;
+    font-size: 1.3rem;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+}
+[data-testid="stSidebar"] hr {
+    border-color: rgba(255,255,255,0.15);
+}
+
+/* ── Page title / headers ──────────────────────────────────── */
+h1 {
+    color: #38003C !important;
+    font-size: 2rem !important;
+    font-weight: 800 !important;
+    letter-spacing: -0.02em;
+    border-bottom: 3px solid #00FF85;
+    padding-bottom: 0.4rem;
+    margin-bottom: 1.2rem !important;
+}
+h2 { color: #38003C !important; font-weight: 700 !important; }
+h3 { color: #38003C !important; font-weight: 600 !important; font-size: 1.05rem !important; }
+
+/* ── Metric cards ──────────────────────────────────────────── */
+[data-testid="stMetric"] {
+    background: #ffffff;
+    border: 1px solid #E0E0E0;
+    border-left: 4px solid #38003C;
+    border-radius: 6px;
+    padding: 0.75rem 1rem !important;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+}
+[data-testid="stMetricLabel"] {
+    color: #555 !important;
+    font-size: 0.72rem !important;
+    font-weight: 600 !important;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+}
+[data-testid="stMetricValue"] {
+    color: #38003C !important;
+    font-size: 1.4rem !important;
+    font-weight: 800 !important;
+}
+[data-testid="stMetricDelta"] svg { display: none; }
+[data-testid="stMetricDelta"] { font-size: 0.8rem !important; color: #04F5FF !important; }
+
+/* ── Buttons ────────────────────────────────────────────────── */
+.stButton > button {
+    background-color: #38003C;
+    color: #00FF85;
+    border: 1px solid #00FF85;
+    border-radius: 4px;
+    font-weight: 600;
+    font-size: 0.82rem;
+    letter-spacing: 0.04em;
+    padding: 0.35rem 0.9rem;
+    transition: background 0.15s, color 0.15s;
+}
+.stButton > button:hover {
+    background-color: #00FF85;
+    color: #38003C;
+    border-color: #00FF85;
+}
+
+/* ── Selectbox / dropdown ─────────────────────────────────── */
+.stSelectbox > div > div {
+    border: 1px solid #E0E0E0 !important;
+    border-radius: 4px !important;
+    background: #ffffff !important;
+    color: #111111 !important;
+}
+.stSelectbox label { font-size: 0.78rem !important; color: #555 !important; font-weight: 600 !important; }
+
+/* ── Text input ─────────────────────────────────────────────── */
+.stTextInput input {
+    border: 1px solid #E0E0E0 !important;
+    border-radius: 4px !important;
+    background: #ffffff !important;
+    color: #111111 !important;
+}
+
+/* ── Slider ─────────────────────────────────────────────────── */
+.stSlider [data-baseweb="slider"] [role="slider"] {
+    background-color: #38003C !important;
+}
+.stSlider [data-baseweb="slider"] [data-testid="stTickBarMin"],
+.stSlider [data-baseweb="slider"] [data-testid="stTickBarMax"] {
+    color: #555 !important;
+}
+
+/* ── Checkbox ────────────────────────────────────────────────── */
+.stCheckbox span[data-baseweb="checkbox"] div {
+    border-color: #38003C !important;
+}
+.stCheckbox input:checked + div { background-color: #38003C !important; }
+
+/* ── Dataframe / table ─────────────────────────────────────── */
+[data-testid="stDataFrame"] {
+    border: 1px solid #E0E0E0;
+    border-radius: 6px;
+    overflow: hidden;
+}
+[data-testid="stDataFrame"] thead tr th {
+    background: #38003C !important;
+    color: #00FF85 !important;
+    font-size: 0.75rem !important;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    padding: 0.5rem 0.75rem !important;
+}
+[data-testid="stDataFrame"] tbody tr:nth-child(even) td {
+    background: #F8F9FA !important;
+}
+[data-testid="stDataFrame"] tbody tr:hover td {
+    background: rgba(56,0,60,0.06) !important;
+}
+
+/* ── Expander ────────────────────────────────────────────────── */
+.streamlit-expanderHeader {
+    background: #ffffff !important;
+    border: 1px solid #E0E0E0 !important;
+    border-radius: 6px !important;
+    color: #38003C !important;
+    font-weight: 600 !important;
+    font-size: 0.85rem !important;
+}
+.streamlit-expanderContent {
+    border: 1px solid #E0E0E0 !important;
+    border-top: none !important;
+    border-radius: 0 0 6px 6px !important;
+    background: #ffffff !important;
+}
+
+/* ── Divider ─────────────────────────────────────────────────── */
+hr { border-color: #E0E0E0; }
+
+/* ── Progress bar (gauge) ────────────────────────────────────── */
+[data-testid="stProgress"] > div > div {
+    background-color: #38003C !important;
+}
+
+/* ── Badge / status pills ─────────────────────────────────── */
+span[style*="background:#f0a500"], span[style*="background:#5c9be0"], span[style*="background:#4caf7d"] {
+    border-radius: 3px !important;
+    font-size: 0.72rem !important;
+    letter-spacing: 0.08em;
+}
+
+/* ── Caption text ────────────────────────────────────────────── */
+.stCaption, [data-testid="stCaptionContainer"] {
+    color: #666 !important;
+    font-size: 0.78rem !important;
+}
+
+/* ── Radio buttons ───────────────────────────────────────────── */
+[data-testid="stSidebar"] .stRadio [data-testid="stMarkdownContainer"] p {
+    color: #F8F9FA !important;
+}
+</style>
+"""
+
 def main():
     st.set_page_config(
         page_title="PitchIQ — Transfer Market Intelligence",
         page_icon="⚽",
         layout="wide",
     )
+    st.markdown(_CSS, unsafe_allow_html=True)
 
     results_df  = load_all_results()
     features_df = load_all_features()
@@ -1171,14 +1568,13 @@ def main():
         return
 
     coefs_by_ls = {
-        ("Premier League", "2025-26"): _load_coef_file(COEF_PATH),
-        ("Premier League", "2024-25"): _load_coef_file(COEF_2425_PATH),
-        ("Bundesliga",     "2025-26"): _load_coef_file(COEF_BL_PATH),
+        (league, season): _load_coef_file(_p(subdir, season, "model_coefficients.json"))
+        for league, season, subdir in _DATASET_SPECS
     }
 
     with st.sidebar:
         st.markdown("## PitchIQ")
-        st.markdown("*Transfer Market Intelligence*")
+        st.markdown("<span style='color:#04F5FF;font-size:0.8rem;letter-spacing:0.1em'>TRANSFER MARKET INTELLIGENCE</span>", unsafe_allow_html=True)
         st.divider()
         page = st.radio(
             "Navigate",
@@ -1187,7 +1583,7 @@ def main():
         )
         st.divider()
         leagues_loaded = sorted(results_df["league"].unique().tolist())
-        st.caption(f"{len(results_df)} players | {', '.join(leagues_loaded)}")
+        st.caption(f"{len(results_df)} players · {len(leagues_loaded)} leagues")
 
     if page == "⚽ Player Lookup":
         page_player_lookup(results_df, coefs_by_ls)
