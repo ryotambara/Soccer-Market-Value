@@ -195,9 +195,11 @@ _POS_LABELS = {
 # raw group name → display label
 _POS_GROUP_TO_LABEL = {
     "striker": "Striker", "winger": "Winger",
-    "attacking_mid": "Attacking Mid", "central_mid": "Central Mid",
+    "attacking_mid": "Attacking Mid", "attmid": "Attacking Mid",
+    "central_mid": "Central Mid", "cm": "Central Mid",
     "cdm": "CDM", "fullback": "Fullback",
-    "centre_back": "Centre-Back", "goalkeeper": "Goalkeeper",
+    "centre_back": "Centre-Back", "cb": "Centre-Back",
+    "goalkeeper": "Goalkeeper", "gk": "Goalkeeper",
 }
 # display label → position prefix used in coefficient column names
 _POS_PREFIX_MAP = {
@@ -347,11 +349,21 @@ def infer_pos_group(row):
         mapped = _POS_GROUP_TO_LABEL.get(pg)
         if mapped:
             return mapped
-    # Fall back to dummy columns
-    for col in _POS_DUMMIES:
-        if col in row.index and row[col] == 1:
-            return _POS_LABELS[col]
-    return "Centre-Back"
+    # Fall back to dummy columns (check both long and abbreviated names)
+    _dummy_check = [
+        ("is_goalkeeper", "Goalkeeper"), ("is_gk", "Goalkeeper"),
+        ("is_striker",    "Striker"),
+        ("is_winger",     "Winger"),
+        ("is_attacking_mid", "Attacking Mid"), ("is_attmid", "Attacking Mid"),
+        ("is_central_mid",   "Central Mid"),   ("is_cm",    "Central Mid"),
+        ("is_cdm",        "CDM"),
+        ("is_fullback",   "Fullback"),
+        ("is_centre_back","Centre-Back"),       ("is_cb",   "Centre-Back"),
+    ]
+    for col, label in _dummy_check:
+        if col in row.index and row[col] >= 0.5:
+            return label
+    return "Unknown"
 
 
 # ── Player Detail ──────────────────────────────────────────────────────────────
@@ -1011,14 +1023,23 @@ def page_model_explorer(features_df):
             st.error("log_market_value column missing from features data.")
             return
 
-        y    = feat[y_col].astype(float)
-        X    = feat[[v for v in selected_vars if v in feat.columns]].astype(float)
-        mask = X.notna().all(axis=1) & y.notna()
-        X, y = X[mask], y[mask]
-        df_m = feat[mask].copy().reset_index(drop=True)
+        y = feat[y_col].astype(float)
+        X = feat[[v for v in selected_vars if v in feat.columns]]
+        X = X.select_dtypes(include=[np.number])
+        X = X.replace([np.inf, -np.inf], np.nan).fillna(0)
+        X = X.loc[:, X.std() > 0]
+        y = y.fillna(y.median())
+        common_idx = X.index.intersection(y.index)
+        X = X.loc[common_idx].reset_index(drop=True)
+        y = y.loc[common_idx].reset_index(drop=True)
+        df_m = feat.loc[common_idx].copy().reset_index(drop=True)
 
-        X_const = sm.add_constant(X)
-        res     = sm.OLS(y, X_const).fit()
+        X_const = sm.add_constant(X, has_constant="add")
+        try:
+            res = sm.OLS(y, X_const).fit()
+        except Exception as e:
+            st.error(f"Regression failed: {e}")
+            st.stop()
 
         m1, m2, m3, m4 = st.columns(4)
         m1.metric("R²",          f"{res.rsquared:.4f}")
