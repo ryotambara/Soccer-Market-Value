@@ -2,7 +2,7 @@
 # streamlit run app/streamlit_app.py
 
 """
-PitchIQ — Transfer Market Intelligence
+The Scout Society — Transfer Market Intelligence
 Streamlit interactive app.
 """
 
@@ -569,6 +569,14 @@ def _show_player_detail(player, results_df, coefs_by_ls):
     else:
         base_log = np.log(max(1.0, base_predicted))
 
+    # Consistency assertion: What-If base must exactly match the player table predicted value
+    _table_predicted = _safe_float(player.get("predicted_market_value_eur"), base_predicted)
+    if abs(base_predicted - _table_predicted) >= 1:
+        st.error(
+            f"Predicted value mismatch: What-If base = {fmt_eur(base_predicted)}, "
+            f"table = {fmt_eur(_table_predicted)}. Check that results.csv is up to date."
+        )
+
     # ── Section A: Club & Context ──
     with st.expander("Club & Context", expanded=True):
         a1, a2 = st.columns(2)
@@ -826,6 +834,80 @@ def page_player_lookup(df, coefs_by_ls):
     if not show_prestige:
         st.info("Prestige premium removed — rankings show performance-only value.")
 
+    # ── Top metrics ──
+    def _compute_r2(df):
+        if df.empty or "residual" not in df.columns or "market_value_eur" not in df.columns:
+            return None
+        log_a = np.log(df["market_value_eur"].clip(lower=1))
+        ss_res = (df["residual"] ** 2).sum()
+        ss_tot = ((log_a - log_a.mean()) ** 2).sum()
+        return 1.0 - ss_res / ss_tot if ss_tot > 0 else None
+
+    r2_val = _compute_r2(filtered)
+    tm1, tm2, tm3, tm4 = st.columns(4)
+    tm1.metric("Model R²", f"{r2_val:.3f}" if r2_val is not None else "—")
+    tm2.metric("Players", len(filtered))
+    if not filtered.empty and "display_residual" in filtered.columns and "player_name" in filtered.columns:
+        most_ov = filtered.loc[filtered["display_residual"].idxmax(), "player_name"]
+        most_uv = filtered.loc[filtered["display_residual"].idxmin(), "player_name"]
+        tm3.metric("Most Overvalued", most_ov)
+        tm4.metric("Most Undervalued", most_uv)
+
+    # ── Color-by selector + Scatter plot ──
+    color_by = st.radio(
+        "Color by",
+        ["Valuation", "League", "Position", "Nationality"],
+        horizontal=True,
+        key="pl_color_by",
+    )
+    _cb_col_map = {
+        "League": "league",
+        "Position": "_pos_display",
+        "Valuation": "display_valuation",
+        "Nationality": "nationality",
+    }
+    cb_col = _cb_col_map.get(color_by, "display_valuation")
+
+    if not filtered.empty and "display_predicted" in filtered.columns and "market_value_eur" in filtered.columns:
+        scatter_df = filtered.copy()
+        if cb_col not in scatter_df.columns:
+            cb_col = "display_valuation"
+        if color_by == "Valuation":
+            cmap = {"overvalued": AMBER, "undervalued": BLUE, "fairly valued": GREEN}
+        elif color_by == "League":
+            cmap = {}
+            for lg in scatter_df[cb_col].dropna().unique():
+                cmap[lg] = _LEAGUE_HIST_COLORS.get(lg, "#888888")
+        else:
+            cmap = None
+
+        hover_cols = [c for c in ["player_name", "club", "display_residual"] if c in scatter_df.columns]
+        fig_sc = px.scatter(
+            scatter_df,
+            x="display_predicted", y="market_value_eur",
+            color=cb_col,
+            color_discrete_map=cmap,
+            hover_data=hover_cols,
+            opacity=0.65,
+            labels={
+                "display_predicted": "Predicted Value (€)",
+                "market_value_eur":  "Actual Value (€)",
+                cb_col: color_by,
+            },
+            title="Actual vs Predicted Market Value (points above line = overvalued)",
+        )
+        mv_max = max(float(scatter_df["market_value_eur"].max()),
+                     float(scatter_df["display_predicted"].max())) * 1.05
+        fig_sc.add_shape(
+            type="line", x0=0, y0=0, x1=mv_max, y1=mv_max,
+            line=dict(color="#888888", dash="dash"), opacity=0.6,
+        )
+        fig_sc.update_layout(
+            paper_bgcolor="#ffffff", plot_bgcolor="#F8F9FA", font_color="#111111",
+            height=430, margin=dict(t=45, b=20),
+        )
+        st.plotly_chart(fig_sc, width='stretch')
+
     # ── Build display table ──
     st.subheader(f"Players ({len(filtered)})")
 
@@ -1082,75 +1164,7 @@ def page_model_explorer(features_df):
         m3.metric("N",           int(res.nobs))
         m4.metric("F-statistic", f"{res.fvalue:.1f}")
 
-        # ── Cross-league effects (prominent) ──
-        cross_vars = [v for v in ["is_bundesliga", "is_season_2024"] if v in res.params.index]
-        if cross_vars:
-            st.subheader("Cross-League / Season Effects")
-            cv_cols = st.columns(len(cross_vars))
-            for i, var in enumerate(cross_vars):
-                coef  = float(res.params[var])
-                pval  = float(res.pvalues[var])
-                prem  = (np.exp(coef) - 1.0) * 100
-                label = "Bundesliga vs PL" if var == "is_bundesliga" else "2024-25 vs 2025-26"
-                stars = "***" if pval < 0.01 else "**" if pval < 0.05 else "*" if pval < 0.1 else ""
-                cv_cols[i].metric(f"{label} premium", f"{prem:+.1f}%",
-                                  delta=f"coef={coef:+.4f}  p={pval:.3f}{stars}")
-
-            # Interpretation text
-            if "is_bundesliga" in res.params.index:
-                coef  = float(res.params["is_bundesliga"])
-                pval  = float(res.pvalues["is_bundesliga"])
-                prem  = (np.exp(coef) - 1.0) * 100
-                dirn  = "more" if prem > 0 else "less"
-                stars = "***" if pval < 0.01 else "**" if pval < 0.05 else "*" if pval < 0.1 else "(not significant)"
-                st.info(
-                    f"**Bundesliga vs Premier League:** Bundesliga players are valued "
-                    f"**{abs(prem):.1f}% {dirn}** than equivalent PL players, "
-                    f"controlling for all performance, age, and club tier factors "
-                    f"(p={pval:.3f} {stars})."
-                )
-            if "is_season_2024" in res.params.index:
-                coef  = float(res.params["is_season_2024"])
-                pval  = float(res.pvalues["is_season_2024"])
-                prem  = (np.exp(coef) - 1.0) * 100
-                dirn  = "higher" if prem > 0 else "lower"
-                stars = "***" if pval < 0.01 else "**" if pval < 0.05 else "*" if pval < 0.1 else "(not significant)"
-                st.info(
-                    f"**2024-25 vs 2025-26:** Market valuations were "
-                    f"**{abs(prem):.1f}% {dirn}** in 2024-25 than 2025-26, "
-                    f"all else equal (p={pval:.3f} {stars})."
-                )
-
-        # ── Coefficient table ──
-        coef_df = pd.DataFrame({
-            "Variable":    res.params.index,
-            "Coefficient": res.params.values,
-            "Std Error":   res.bse.values,
-            "T-stat":      res.tvalues.values,
-            "P-value":     res.pvalues.values,
-        })
-        coef_df["Sig"] = coef_df["P-value"].apply(
-            lambda p: "***" if p < 0.01 else "**" if p < 0.05 else "*" if p < 0.1 else ""
-        )
-        coef_df = coef_df[coef_df["Variable"] != "const"]
-        coef_df["_abs"] = coef_df["Coefficient"].abs()
-        coef_df = coef_df.sort_values("_abs", ascending=False).drop(columns="_abs")
-
-        def _color_row(row):
-            if row["P-value"] < 0.05: return ["background-color: #1a3a1a"] * len(row)
-            if row["P-value"] < 0.1:  return ["background-color: #3a3210"] * len(row)
-            return ["background-color: #1a1a1a"] * len(row)
-
-        st.subheader("Coefficients")
-        st.dataframe(
-            coef_df.style.apply(_color_row, axis=1).format({
-                "Coefficient": "{:.4f}", "Std Error": "{:.4f}",
-                "T-stat": "{:.3f}", "P-value": "{:.4f}",
-            }),
-            width='stretch', height=400,
-        )
-
-        # ── Charts ──
+        # Build shared chart data
         pred_log  = res.fittedvalues
         resids    = (y - pred_log).values
         pred_eur  = np.exp(pred_log.values)
@@ -1165,6 +1179,7 @@ def page_model_explorer(features_df):
             "residual":      resids,
             "actual_eur":    act_eur,
             "predicted_eur": pred_eur,
+            "fitted_log":    pred_log.values,
             "valuation":     [_vlabel(r) for r in resids],
         })
         if "league" in df_m.columns:
@@ -1172,63 +1187,184 @@ def page_model_explorer(features_df):
         if "season" in df_m.columns:
             chart_df["season"] = df_m["season"].values
 
-        # Build display label per league/season
         if "league" in chart_df.columns and "season" in chart_df.columns:
             def _ls_label(r):
                 lg, ss = r["league"], r["season"]
-                if lg == "Premier League":
-                    return f"PL {ss}"
-                if lg == "Bundesliga":
-                    return f"Bundesliga {ss}"
+                if lg == "Premier League": return f"PL {ss}"
+                if lg == "Bundesliga":     return f"Bundesliga {ss}"
                 return lg
             chart_df["_ls"] = chart_df.apply(_ls_label, axis=1)
         elif "league" in chart_df.columns:
             chart_df["_ls"] = chart_df["league"]
 
-        ch1, ch2 = st.columns(2)
-        with ch1:
-            has_multi = "_ls" in chart_df.columns and chart_df["_ls"].nunique() > 1
-            fig_h = px.histogram(
-                chart_df, x="residual", nbins=40,
-                title="Residual Distribution",
-                color="_ls" if has_multi else None,
-                color_discrete_map=_LEAGUE_HIST_COLORS if has_multi else None,
-                color_discrete_sequence=None if has_multi else [AMBER],
-                opacity=0.6 if has_multi else 0.8,
-                barmode="overlay" if has_multi else "relative",
-                labels={"_ls": "League/Season"},
-            )
-            fig_h.add_vline(x=0, line_color="white", line_dash="dash")
-            fig_h.update_layout(paper_bgcolor="#ffffff", plot_bgcolor="#F8F9FA", font_color="#111111")
-            st.plotly_chart(fig_h, width='stretch')
-        with ch2:
-            cmap = {"overvalued": AMBER, "undervalued": BLUE, "fairly valued": GREEN}
-            fig_s = px.scatter(
-                chart_df, x="predicted_eur", y="actual_eur",
-                color="valuation", color_discrete_map=cmap,
-                title="Actual vs Predicted",
-                labels={"predicted_eur": "Predicted (€)", "actual_eur": "Actual (€)"},
-                opacity=0.7,
-            )
-            mv = max(chart_df["actual_eur"].max(), chart_df["predicted_eur"].max())
-            fig_s.add_shape(type="line", x0=0, y0=0, x1=mv, y1=mv,
-                            line=dict(color="white", dash="dash"))
-            fig_s.update_layout(paper_bgcolor="#ffffff", plot_bgcolor="#F8F9FA", font_color="#111111")
-            st.plotly_chart(fig_s, width='stretch')
-
         if "player_name" in df_m.columns:
             chart_df["player_name"] = df_m["player_name"].values
-            chart_df["club"]        = df_m["club"].values if "club" in df_m.columns else ""
-            chart_df = chart_df.sort_values("residual", ascending=False)
-            tu1, tu2 = st.columns(2)
-            with tu1:
-                st.subheader("Top 10 Overvalued")
-                st.dataframe(chart_df.head(10)[["player_name", "club", "residual"]].reset_index(drop=True),
-                             width='stretch')
-            with tu2:
-                st.subheader("Top 10 Undervalued")
-                st.dataframe(chart_df.tail(10)[["player_name", "club", "residual"]].iloc[::-1].reset_index(drop=True),
-                             width='stretch')
+        if "club" in df_m.columns:
+            chart_df["club"] = df_m["club"].values
+
+        # Build coef table
+        coef_df = pd.DataFrame({
+            "Variable":    res.params.index,
+            "Coefficient": res.params.values,
+            "Std Error":   res.bse.values,
+            "T-stat":      res.tvalues.values,
+            "P-value":     res.pvalues.values,
+        })
+        coef_df["Sig"] = coef_df["P-value"].apply(
+            lambda p: "***" if p < 0.01 else "**" if p < 0.05 else "*" if p < 0.1 else ""
+        )
+        coef_df = coef_df[coef_df["Variable"] != "const"].copy()
+        coef_df["_abs"] = coef_df["Coefficient"].abs()
+        coef_df = coef_df.sort_values("_abs", ascending=False).drop(columns="_abs")
+
+        def _color_row(row):
+            if row["P-value"] < 0.05: return ["background-color: #1a3a1a"] * len(row)
+            if row["P-value"] < 0.1:  return ["background-color: #3a3210"] * len(row)
+            return ["background-color: #1a1a1a"] * len(row)
+
+        tab1, tab2, tab3 = st.tabs(["📐 The Equation", "📊 Coefficient Plot", "🔬 Diagnostics"])
+
+        with tab1:
+            # ── Regression equation display ──
+            intercept = float(res.params.get("const", 0.0))
+            st.markdown(f"**log(value) = {intercept:.4f}**")
+            eq_lines = []
+            for _, crow in coef_df.iterrows():
+                sign = "+" if crow["Coefficient"] >= 0 else "−"
+                sig  = crow["Sig"]
+                color = "#00cc66" if crow["P-value"] < 0.05 else ("#ff6666" if crow["Coefficient"] < 0 else "#aaaaaa")
+                eq_lines.append(
+                    f'<span style="color:{color}">  {sign} {abs(crow["Coefficient"]):.4f} × {crow["Variable"]} '
+                    f'<small>[{sig if sig else "ns"} p={crow["P-value"]:.3f}]</small></span>'
+                )
+            st.markdown(
+                '<pre style="font-family:monospace;font-size:0.82rem;line-height:1.7;'
+                'background:#1a1a1a;padding:1rem;border-radius:6px;overflow-x:auto">'
+                + "\n".join(eq_lines[:30])
+                + ("..." if len(eq_lines) > 30 else "")
+                + "</pre>",
+                unsafe_allow_html=True,
+            )
+            st.caption(f"Showing {min(len(eq_lines),30)} of {len(eq_lines)} variables. "
+                       f"Green = p<0.05 | Gray = not significant | Red bar = negative coefficient.")
+
+            st.subheader("Coefficients")
+            st.dataframe(
+                coef_df.style.apply(_color_row, axis=1).format({
+                    "Coefficient": "{:.4f}", "Std Error": "{:.4f}",
+                    "T-stat": "{:.3f}", "P-value": "{:.4f}",
+                }),
+                width='stretch', height=400,
+            )
+
+        with tab2:
+            # ── Forest plot (top 15 by |coefficient|, exclude cross-league dummies) ──
+            forest_df = coef_df[~coef_df["Variable"].isin(["is_bundesliga", "is_season_2024"])].head(15).copy()
+            forest_df["color"] = forest_df["Coefficient"].apply(lambda c: BLUE if c >= 0 else AMBER)
+            forest_df["ci_lo"] = forest_df["Coefficient"] - 1.96 * forest_df["Std Error"]
+            forest_df["ci_hi"] = forest_df["Coefficient"] + 1.96 * forest_df["Std Error"]
+            forest_df = forest_df.sort_values("Coefficient", ascending=True)
+
+            fig_forest = go.Figure()
+            for _, fr in forest_df.iterrows():
+                fig_forest.add_trace(go.Scatter(
+                    x=[fr["ci_lo"], fr["ci_hi"]], y=[fr["Variable"], fr["Variable"]],
+                    mode="lines", line=dict(color=fr["color"], width=2), showlegend=False,
+                ))
+                fig_forest.add_trace(go.Scatter(
+                    x=[fr["Coefficient"]], y=[fr["Variable"]],
+                    mode="markers", marker=dict(color=fr["color"], size=9),
+                    showlegend=False,
+                    hovertemplate=f"<b>{fr['Variable']}</b><br>coef={fr['Coefficient']:.4f}<br>p={fr['P-value']:.4f}<extra></extra>",
+                ))
+            fig_forest.add_vline(x=0, line_color="#888888", line_dash="dash", opacity=0.7)
+            fig_forest.update_layout(
+                title="Coefficient Forest Plot (top 15 by magnitude, 95% CI)",
+                xaxis_title="Coefficient (log scale)",
+                paper_bgcolor="#ffffff", plot_bgcolor="#F8F9FA", font_color="#111111",
+                height=max(350, len(forest_df) * 28), margin=dict(l=160, t=50, b=30),
+            )
+            st.plotly_chart(fig_forest, width='stretch')
+
+        with tab3:
+            # ── Diagnostics 2×2 ──
+            dc1, dc2 = st.columns(2)
+            has_multi = "_ls" in chart_df.columns and chart_df["_ls"].nunique() > 1
+            with dc1:
+                fig_h = px.histogram(
+                    chart_df, x="residual", nbins=40,
+                    title="Residual Distribution",
+                    color="_ls" if has_multi else None,
+                    color_discrete_map=_LEAGUE_HIST_COLORS if has_multi else None,
+                    color_discrete_sequence=None if has_multi else [AMBER],
+                    opacity=0.6 if has_multi else 0.8,
+                    barmode="overlay" if has_multi else "relative",
+                    labels={"_ls": "League/Season"},
+                )
+                fig_h.add_vline(x=0, line_color="white", line_dash="dash")
+                fig_h.update_layout(paper_bgcolor="#ffffff", plot_bgcolor="#F8F9FA", font_color="#111111")
+                st.plotly_chart(fig_h, width='stretch')
+
+            with dc2:
+                cmap_v = {"overvalued": AMBER, "undervalued": BLUE, "fairly valued": GREEN}
+                fig_s = px.scatter(
+                    chart_df, x="predicted_eur", y="actual_eur",
+                    color="valuation", color_discrete_map=cmap_v,
+                    title="Actual vs Predicted",
+                    labels={"predicted_eur": "Predicted (€)", "actual_eur": "Actual (€)"},
+                    opacity=0.7,
+                )
+                mv = max(float(chart_df["actual_eur"].max()), float(chart_df["predicted_eur"].max()))
+                fig_s.add_shape(type="line", x0=0, y0=0, x1=mv, y1=mv,
+                                line=dict(color="white", dash="dash"))
+                fig_s.update_layout(paper_bgcolor="#ffffff", plot_bgcolor="#F8F9FA", font_color="#111111")
+                st.plotly_chart(fig_s, width='stretch')
+
+            dc3, dc4 = st.columns(2)
+            with dc3:
+                fig_rf = px.scatter(
+                    chart_df, x="fitted_log", y="residual",
+                    title="Residuals vs Fitted",
+                    labels={"fitted_log": "Fitted log(value)", "residual": "Residual"},
+                    opacity=0.5, color_discrete_sequence=[SECONDARY],
+                )
+                fig_rf.add_hline(y=0, line_color="white", line_dash="dash", opacity=0.5)
+                fig_rf.update_layout(paper_bgcolor="#ffffff", plot_bgcolor="#F8F9FA", font_color="#111111")
+                st.plotly_chart(fig_rf, width='stretch')
+
+            with dc4:
+                # OLS test statistics as metric cards
+                st.subheader("OLS Diagnostics")
+                try:
+                    omni_stat = res.diagn.get("omnibus", (None, None))[0] if hasattr(res, "diagn") else None
+                    omni_pval = res.diagn.get("omnibus", (None, None))[1] if hasattr(res, "diagn") else None
+                except Exception:
+                    omni_stat, omni_pval = None, None
+                dg1, dg2 = st.columns(2)
+                dg1.metric("R²",     f"{res.rsquared:.4f}")
+                dg2.metric("Adj R²", f"{res.rsquared_adj:.4f}")
+                dg3, dg4 = st.columns(2)
+                dg3.metric("F-stat", f"{res.fvalue:.2f}")
+                dg4.metric("Prob(F)", f"{res.f_pvalue:.4f}")
+                dg5, dg6 = st.columns(2)
+                dg5.metric("Durbin-Watson", f"{res.durbin_watson:.3f}" if hasattr(res, "durbin_watson") else "—")
+                dg6.metric("Cond. Number", f"{res.condition_number:.1f}" if hasattr(res, "condition_number") else "—")
+
+            if "player_name" in chart_df.columns:
+                chart_df_sorted = chart_df.sort_values("residual", ascending=False)
+                tu1, tu2 = st.columns(2)
+                with tu1:
+                    st.subheader("Top 10 Overvalued")
+                    st.dataframe(
+                        chart_df_sorted.head(10)[["player_name", "club", "residual"]].reset_index(drop=True),
+                        width='stretch'
+                    )
+                with tu2:
+                    st.subheader("Top 10 Undervalued")
+                    st.dataframe(
+                        chart_df_sorted.tail(10)[["player_name", "club", "residual"]].iloc[::-1].reset_index(drop=True),
+                        width='stretch'
+                    )
 
     elif run and not selected_vars:
         st.warning("Select at least one variable to run the regression.")
@@ -1272,6 +1408,7 @@ def page_nat_pos(df, coefs_by_ls):
     primary_season = sel_seasons[0] if sel_seasons else "2025-26"
     coefs    = coefs_by_ls.get((primary_league, primary_season), {})
     coef_map = coefs.get("coefficients", {}) if coefs else {}
+    pval_map = coefs.get("pvalues", {}) if coefs else {}
 
     df_view = filtered.copy()
     df_view["_nat_group"] = df_view.apply(infer_nat_group, axis=1)
@@ -1280,22 +1417,44 @@ def page_nat_pos(df, coefs_by_ls):
     _nat_dummy_for = {v: k for k, v in _NAT_LABELS.items() if k != "baseline"}
     _pos_dummy_for = {v: k for k, v in _POS_LABELS.items() if k != "baseline"}
 
-    tab_nat, tab_pos = st.tabs(["🌍 By Nationality", "⚽ By Position"])
+    # ── Club tier effect cards ──────────────────────────────────────────────
+    st.subheader("Club Tier Effects")
+    _tier_effects = [
+        ("Historic Big 6", "is_historic_top6"),
+        ("Promoted Club",  "is_promoted"),
+        ("Bottom 6",       "is_bottom6"),
+        ("Current Top 4",  "is_top4"),
+    ]
+    tier_cols = st.columns(len(_tier_effects))
+    for tc, (label, var) in zip(tier_cols, _tier_effects):
+        raw_c = coef_map.get(var)
+        pval  = pval_map.get(var)
+        if raw_c is not None:
+            pct = _dummy_to_pct(raw_c)
+            sig = "***" if (pval and pval < 0.01) else "**" if (pval and pval < 0.05) else "*" if (pval and pval < 0.1) else ""
+            pval_str = f"p={pval:.3f}{sig}" if pval is not None else ""
+            tc.metric(label, f"{pct:+.1f}%", delta=pval_str)
+        else:
+            tc.metric(label, "n/a")
 
-    with tab_nat:
+    if len(sel_leagues) > 1:
         st.caption(
-            "**Model Coef Premium %** = regression estimate of % over/under-valuation for this "
-            "nationality, controlling for performance, age, club tier, and position (baseline = Other Europe). "
-            "**Median Residual %** = median individual residual for players in this group × 100 "
-            "(positive = typically over-priced vs model; negative = typically under-priced). "
-            "Note: mean residual is always 0 by OLS construction when group dummies are included."
+            f"Coefficients from **{primary_league} {primary_season}** "
+            "(first selected league). Select a single league for league-specific values."
         )
-        if len(sel_leagues) > 1:
-            st.info(
-                f"Showing coefficients from **{primary_league} {primary_season}** "
-                "(first selected league). Select a single league for league-specific coefficients."
-            )
 
+    st.divider()
+
+    # ── Two-column layout: Nationality (left) | Position (right) ──────────
+    col_nat, col_pos = st.columns(2)
+
+    # ── Nationality ──────────────────────────────────────────────────────
+    with col_nat:
+        st.subheader("By Nationality")
+        st.caption(
+            "**Model Coef %** = % premium/discount controlling for performance, age, club tier, position "
+            "(baseline = Other Europe). **Median Resid %** = median individual residual × 100."
+        )
         nat_agg = []
         for grp_name, grp in df_view.groupby("_nat_group"):
             if grp.empty:
@@ -1306,51 +1465,42 @@ def page_nat_pos(df, coefs_by_ls):
             ov_idx   = grp["residual"].idxmax()
             uv_idx   = grp["residual"].idxmin()
             nat_agg.append({
-                "Nationality":           grp_name,
-                "Players":               len(grp),
-                "Model Coef Premium %":  coef_pct,
-                "Median Residual %":     round(float(grp["residual"].median()) * 100, 1),
-                "Model Coef (log)":      round(raw_coef, 4),
-                "Most Overvalued":       grp.loc[ov_idx, player_col],
-                "Most Undervalued":      grp.loc[uv_idx, player_col],
-                "_pct":                  coef_pct,
+                "Nationality":          grp_name,
+                "Players":              len(grp),
+                "Model Coef %":         coef_pct,
+                "Median Resid %":       round(float(grp["residual"].median()) * 100, 1),
+                "Most Overvalued":      grp.loc[ov_idx, player_col],
+                "Most Undervalued":     grp.loc[uv_idx, player_col],
+                "_pct":                 coef_pct,
             })
-        nat_df = pd.DataFrame(nat_agg).sort_values("Model Coef Premium %", ascending=False)
+        nat_df = pd.DataFrame(nat_agg).sort_values("Model Coef %", ascending=False)
 
         fig_nat = px.bar(
-            nat_df, x="Nationality", y="Model Coef Premium %",
-            title="Model-Estimated Market Premium/Discount by Nationality (controlling all else)",
-            color="Model Coef Premium %",
+            nat_df, x="Nationality", y="Model Coef %",
+            title="Nationality Premium/Discount",
+            color="Model Coef %",
             color_continuous_scale=[[0, TERTIARY], [0.5, "#aaa"], [1, AMBER]],
         )
         fig_nat.update_layout(
             paper_bgcolor="#ffffff", plot_bgcolor="#F8F9FA", font_color="#111111",
-            coloraxis_showscale=False, xaxis_tickangle=-30,
+            coloraxis_showscale=False, xaxis_tickangle=-40, height=320,
+            margin=dict(t=40, b=60),
         )
         fig_nat.add_hline(y=0, line_color="white", line_dash="dash", opacity=0.4)
         st.plotly_chart(fig_nat, width='stretch')
-        st.dataframe(nat_df.drop(columns="_pct").reset_index(drop=True), width='stretch')
+        st.dataframe(nat_df.drop(columns="_pct").reset_index(drop=True), width='stretch', height=260)
         for _, row in nat_df.iterrows():
             grp = df_view[df_view["_nat_group"] == row["Nationality"]]
             if len(grp) >= 3:
                 st.info(_auto_insight(row["Nationality"], grp, player_col, row["_pct"]))
 
-    with tab_pos:
+    # ── Position ─────────────────────────────────────────────────────────
+    with col_pos:
+        st.subheader("By Position")
         st.caption(
-            "**Model Coef Premium %** = model's estimated % over-payment (+) or under-payment (−) "
-            "for a player in this position, holding all else constant. Baseline = Centre-Back (0%). "
-            "**Median Residual %** = median individual residual × 100 (positive = typically over-priced vs model)."
+            "**Model Coef %** = model's % premium (+) / discount (−) for this position, "
+            "all else constant. Baseline = Centre-Back (0%)."
         )
-        hist_coef = coef_map.get("is_historic_top6")
-        hist_pval = (coefs.get("pvalues", {}) or {}).get("is_historic_top6") if coefs else None
-        if hist_coef is not None:
-            prem_pct = _dummy_to_pct(hist_coef)
-            pval_str = f"p={hist_pval:.3f}" if hist_pval is not None else "p=n/a"
-            st.info(
-                f"**Historic top club prestige premium: {prem_pct:+.1f}%** ({pval_str})  "
-                f"— {primary_league} model estimate."
-            )
-
         pos_agg = []
         for grp_name, grp in df_view.groupby("_pos_group"):
             if grp.empty:
@@ -1363,53 +1513,274 @@ def page_nat_pos(df, coefs_by_ls):
             pos_agg.append({
                 "Position":             grp_name,
                 "Players":              len(grp),
-                "Model Coef Premium %": coef_pct,
-                "Median Residual %":    round(float(grp["residual"].median()) * 100, 1),
-                "Model Coef (log)":     round(raw_coef, 4),
+                "Model Coef %":         coef_pct,
+                "Median Resid %":       round(float(grp["residual"].median()) * 100, 1),
                 "Most Overvalued":      grp.loc[ov_idx, player_col],
                 "Most Undervalued":     grp.loc[uv_idx, player_col],
                 "_pct":                 coef_pct,
             })
-        pos_df = pd.DataFrame(pos_agg).sort_values("Model Coef Premium %", ascending=False)
+        pos_df = pd.DataFrame(pos_agg).sort_values("Model Coef %", ascending=False)
 
         fig_pos = px.bar(
-            pos_df, x="Position", y="Model Coef Premium %",
-            title="Model-Estimated Market Premium/Discount by Position (controlling all else)",
-            color="Model Coef Premium %",
+            pos_df, x="Position", y="Model Coef %",
+            title="Position Premium/Discount",
+            color="Model Coef %",
             color_continuous_scale=[[0, TERTIARY], [0.5, "#aaa"], [1, AMBER]],
         )
         fig_pos.update_layout(
             paper_bgcolor="#ffffff", plot_bgcolor="#F8F9FA", font_color="#111111",
-            coloraxis_showscale=False,
+            coloraxis_showscale=False, height=320, margin=dict(t=40, b=30),
         )
         fig_pos.add_hline(y=0, line_color="white", line_dash="dash", opacity=0.4)
         st.plotly_chart(fig_pos, width='stretch')
-        st.dataframe(pos_df.drop(columns="_pct").reset_index(drop=True), width='stretch')
-
-        if "xg" in df_view.columns:
-            fig_xg = px.scatter(
-                df_view, x="xg", y="residual", color="_pos_group",
-                title="xG vs Individual Residual by Position",
-                hover_data=[player_col], opacity=0.7,
-            )
-            fig_xg.add_hline(y=0, line_color="white", line_dash="dash", opacity=0.4)
-            fig_xg.update_layout(paper_bgcolor="#ffffff", plot_bgcolor="#F8F9FA", font_color="#111111")
-            st.plotly_chart(fig_xg, width='stretch')
-
-        if "rating" in df_view.columns:
-            fig_rat = px.scatter(
-                df_view, x="rating", y="residual", color="_pos_group",
-                title="Rating vs Individual Residual by Position",
-                hover_data=[player_col], opacity=0.7,
-            )
-            fig_rat.add_hline(y=0, line_color="white", line_dash="dash", opacity=0.4)
-            fig_rat.update_layout(paper_bgcolor="#ffffff", plot_bgcolor="#F8F9FA", font_color="#111111")
-            st.plotly_chart(fig_rat, width='stretch')
-
+        st.dataframe(pos_df.drop(columns="_pct").reset_index(drop=True), width='stretch', height=260)
         for _, row in pos_df.iterrows():
             grp = df_view[df_view["_pos_group"] == row["Position"]]
             if len(grp) >= 3:
                 st.info(_auto_insight(row["Position"], grp, player_col, row["_pct"]))
+
+    # ── Scatter plots (full width below columns) ──────────────────────────
+    st.divider()
+    if "xg" in df_view.columns:
+        fig_xg = px.scatter(
+            df_view, x="xg", y="residual", color="_pos_group",
+            title="xG vs Individual Residual by Position",
+            hover_data=[player_col], opacity=0.7,
+        )
+        fig_xg.add_hline(y=0, line_color="white", line_dash="dash", opacity=0.4)
+        fig_xg.update_layout(paper_bgcolor="#ffffff", plot_bgcolor="#F8F9FA", font_color="#111111")
+        st.plotly_chart(fig_xg, width='stretch')
+
+    if "rating" in df_view.columns:
+        fig_rat = px.scatter(
+            df_view, x="rating", y="residual", color="_pos_group",
+            title="Rating vs Individual Residual by Position",
+            hover_data=[player_col], opacity=0.7,
+        )
+        fig_rat.add_hline(y=0, line_color="white", line_dash="dash", opacity=0.4)
+        fig_rat.update_layout(paper_bgcolor="#ffffff", plot_bgcolor="#F8F9FA", font_color="#111111")
+        st.plotly_chart(fig_rat, width='stretch')
+
+
+# ── Page 4: Cross-League Analysis ─────────────────────────────────────────────
+
+def page_cross_league(results_df, features_df, coefs_by_ls):
+    st.title("Cross-League Analysis")
+
+    with st.sidebar:
+        st.subheader("Reference seasons")
+        pl_season  = st.selectbox("PL season",  ["2025-26", "2024-25"], key="cl_pl_s")
+        bl_season  = st.selectbox("BL season",  ["2025-26", "2024-25"], key="cl_bl_s")
+
+    pl_coefs = coefs_by_ls.get(("Premier League", pl_season), {})
+    bl_coefs = coefs_by_ls.get(("Bundesliga",     bl_season), {})
+    pl_coef_map = pl_coefs.get("coefficients", {}) if pl_coefs else {}
+    bl_coef_map = bl_coefs.get("coefficients", {}) if bl_coefs else {}
+    pl_pval_map = pl_coefs.get("pvalues",      {}) if pl_coefs else {}
+    bl_pval_map = bl_coefs.get("pvalues",      {}) if bl_coefs else {}
+
+    pl_data = results_df[
+        (results_df["league"] == "Premier League") & (results_df["season"] == pl_season)
+    ]
+    bl_data = results_df[
+        (results_df["league"] == "Bundesliga") & (results_df["season"] == bl_season)
+    ]
+
+    def _compute_r2(df):
+        if df.empty or "residual" not in df.columns or "market_value_eur" not in df.columns:
+            return None
+        log_a  = np.log(df["market_value_eur"].clip(lower=1))
+        ss_res = (df["residual"] ** 2).sum()
+        ss_tot = ((log_a - log_a.mean()) ** 2).sum()
+        return 1.0 - ss_res / ss_tot if ss_tot > 0 else None
+
+    pl_r2 = _compute_r2(pl_data)
+    bl_r2 = _compute_r2(bl_data)
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric(f"PL {pl_season} R²",   f"{pl_r2:.3f}" if pl_r2 is not None else "—")
+    c2.metric(f"BL {bl_season} R²",   f"{bl_r2:.3f}" if bl_r2 is not None else "—")
+    c3.metric(f"PL {pl_season} N",    len(pl_data))
+    c4.metric(f"BL {bl_season} N",    len(bl_data))
+
+    # ── Coefficient comparison table ───────────────────────────────────────
+    st.subheader("Coefficient Comparison: Premier League vs Bundesliga")
+    _KEY_VARS = [
+        ("is_historic_top6",      "Historic Top Club"),
+        ("is_promoted",           "Promoted Club"),
+        ("is_bottom6",            "Bottom 6"),
+        ("is_top4",               "Current Top 4"),
+        ("is_top6",               "Current Top 6"),
+        ("is_brazilian",          "Brazilian"),
+        ("is_french",             "French"),
+        ("is_argentinian",        "Argentinian"),
+        ("is_english",            "English"),
+        ("is_african",            "African"),
+        ("is_german",             "German"),
+        ("is_portuguese",         "Portuguese"),
+    ]
+    rows = []
+    for var, label in _KEY_VARS:
+        pl_c = pl_coef_map.get(var)
+        bl_c = bl_coef_map.get(var)
+        if pl_c is None and bl_c is None:
+            continue
+        pl_c = _safe_float(pl_c)
+        bl_c = _safe_float(bl_c)
+        pl_p = _safe_float(pl_pval_map.get(var), 1.0)
+        bl_p = _safe_float(bl_pval_map.get(var), 1.0)
+
+        def _sig(p):
+            return "***" if p < 0.01 else "**" if p < 0.05 else "*" if p < 0.1 else ""
+
+        same_dir = (pl_c * bl_c) > 0
+        both_sig = pl_p < 0.1 and bl_p < 0.1
+        consistent = "✅" if (same_dir and both_sig) else "⚠️" if same_dir else "❌"
+
+        rows.append({
+            "Effect":       label,
+            "PL Coef":      f"{pl_c:+.3f}",
+            "PL %":         f"{_dummy_to_pct(pl_c):+.1f}%",
+            "PL Sig":       _sig(pl_p),
+            "BL Coef":      f"{bl_c:+.3f}",
+            "BL %":         f"{_dummy_to_pct(bl_c):+.1f}%",
+            "BL Sig":       _sig(bl_p),
+            "Consistent?":  consistent,
+            "_pl_c":        pl_c,
+            "_bl_c":        bl_c,
+        })
+
+    if rows:
+        compare_df = pd.DataFrame(rows)
+        st.dataframe(
+            compare_df[["Effect", "PL Coef", "PL %", "PL Sig", "BL Coef", "BL %", "BL Sig", "Consistent?"]].reset_index(drop=True),
+            width='stretch',
+        )
+
+        # ── Coefficient comparison scatter ────────────────────────────────
+        st.subheader("Consistency Chart")
+        st.caption("Points on the diagonal = same direction and magnitude across leagues. "
+                   "Points above diagonal = effect stronger in Bundesliga.")
+        fig_cmp = px.scatter(
+            compare_df, x="_pl_c", y="_bl_c", text="Effect",
+            labels={"_pl_c": "PL Coefficient", "_bl_c": "Bundesliga Coefficient"},
+            title="PL vs Bundesliga: Coefficient Consistency",
+        )
+        diag_lim = max(compare_df["_pl_c"].abs().max(), compare_df["_bl_c"].abs().max()) * 1.3
+        fig_cmp.add_shape(
+            type="line", x0=-diag_lim, y0=-diag_lim, x1=diag_lim, y1=diag_lim,
+            line=dict(color="#888888", dash="dash"),
+        )
+        fig_cmp.add_hline(y=0, line_color="white", line_dash="dot", opacity=0.3)
+        fig_cmp.add_vline(x=0, line_color="white", line_dash="dot", opacity=0.3)
+        fig_cmp.update_traces(textposition="top center", marker=dict(size=10, color=SECONDARY))
+        fig_cmp.update_layout(
+            paper_bgcolor="#ffffff", plot_bgcolor="#F8F9FA", font_color="#111111",
+            height=420,
+        )
+        st.plotly_chart(fig_cmp, width='stretch')
+
+        # ── Key insight ──────────────────────────────────────────────────
+        consistent_count = sum(1 for r in rows if r["Consistent?"] == "✅")
+        divergent_count  = sum(1 for r in rows if r["Consistent?"] == "❌")
+        st.markdown(
+            f'<div style="background:#f0fff4;border-left:4px solid #00FF85;padding:1rem;border-radius:4px;margin-top:1rem">'
+            f"<strong>Key finding:</strong> {consistent_count} of {len(rows)} effects are consistent across leagues "
+            f"(same direction, both significant p&lt;0.1). "
+            f"{divergent_count} effects diverge in direction. "
+            f"Prestige and relegation effects tend to be universal; nationality premiums can vary."
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+
+    # ── Combined cross-league regression ──────────────────────────────────
+    st.divider()
+    st.subheader("Combined Cross-League Regression")
+    st.caption(
+        "Combine PL and Bundesliga data, add **is_bundesliga** dummy. "
+        "A significant negative coefficient → Bundesliga players are systematically undervalued "
+        "relative to equivalent Premier League players."
+    )
+    run_combined = st.button("▶ Run Combined Regression", type="primary", key="cl_run")
+
+    if run_combined and not features_df.empty:
+        feat = features_df.copy()
+        feat = feat[feat["league"].isin(["Premier League", "Bundesliga"])].copy()
+        if "league" in feat.columns:
+            feat["is_bundesliga"] = (feat["league"] == "Bundesliga").astype(int)
+        if "season" in feat.columns:
+            feat["is_season_2024"] = (feat["season"] == "2024-25").astype(int)
+
+        y_col = "log_market_value"
+        if y_col not in feat.columns:
+            st.error("log_market_value column missing from features data.")
+        else:
+            _base_vars = [
+                "is_historic_top6", "is_promoted", "is_bottom6", "is_top4",
+                "is_striker", "is_winger", "is_attacking_mid", "is_central_mid",
+                "is_cdm", "is_fullback", "is_goalkeeper",
+                "is_brazilian", "is_french", "is_argentinian", "is_english",
+                "is_african", "minutes_played", "is_bundesliga", "is_season_2024",
+            ]
+            avail = [v for v in _base_vars if v in feat.columns]
+            y  = feat[y_col].astype(float)
+            X  = feat[avail].select_dtypes(include=[np.number])
+            X  = X.replace([np.inf, -np.inf], np.nan).fillna(0)
+            X  = X.loc[:, X.std() > 0]
+            y  = y.fillna(y.median())
+            common_idx = X.index.intersection(y.index)
+            X  = X.loc[common_idx].reset_index(drop=True)
+            y  = y.loc[common_idx].reset_index(drop=True)
+            X_const = sm.add_constant(X, has_constant="add")
+            try:
+                res = sm.OLS(y, X_const).fit()
+            except Exception as e:
+                st.error(f"Regression failed: {e}")
+            else:
+                mc1, mc2, mc3, mc4 = st.columns(4)
+                mc1.metric("R²",    f"{res.rsquared:.4f}")
+                mc2.metric("Adj R²",f"{res.rsquared_adj:.4f}")
+                mc3.metric("N",     int(res.nobs))
+                mc4.metric("F-stat",f"{res.fvalue:.1f}")
+
+                cross_vars = [v for v in ["is_bundesliga", "is_season_2024"] if v in res.params.index]
+                if cross_vars:
+                    cv_cols = st.columns(len(cross_vars))
+                    for i, var in enumerate(cross_vars):
+                        coef  = float(res.params[var])
+                        pval  = float(res.pvalues[var])
+                        prem  = (np.exp(coef) - 1.0) * 100
+                        label = "Bundesliga vs PL" if var == "is_bundesliga" else "2024-25 vs 2025-26"
+                        stars = "***" if pval < 0.01 else "**" if pval < 0.05 else "*" if pval < 0.1 else ""
+                        cv_cols[i].metric(f"{label} premium", f"{prem:+.1f}%",
+                                          delta=f"coef={coef:+.4f}  p={pval:.3f}{stars}")
+
+                    if "is_bundesliga" in res.params.index:
+                        coef = float(res.params["is_bundesliga"])
+                        pval = float(res.pvalues["is_bundesliga"])
+                        prem = (np.exp(coef) - 1.0) * 100
+                        dirn = "more" if prem > 0 else "less"
+                        stars = "***" if pval < 0.01 else "**" if pval < 0.05 else "*" if pval < 0.1 else "(not significant)"
+                        st.info(
+                            f"**Bundesliga vs Premier League:** Bundesliga players are valued "
+                            f"**{abs(prem):.1f}% {dirn}** than equivalent PL players, "
+                            f"controlling for performance, age, and club tier "
+                            f"(p={pval:.3f} {stars})."
+                        )
+
+                coef_out = pd.DataFrame({
+                    "Variable":    res.params.index,
+                    "Coefficient": res.params.values,
+                    "Std Error":   res.bse.values,
+                    "P-value":     res.pvalues.values,
+                    "Sig":         ["***" if p < 0.01 else "**" if p < 0.05 else "*" if p < 0.1 else ""
+                                    for p in res.pvalues.values],
+                })
+                coef_out = coef_out[coef_out["Variable"] != "const"].sort_values("Coefficient", ascending=False)
+                st.dataframe(coef_out.reset_index(drop=True), width='stretch')
+
+    elif run_combined and features_df.empty:
+        st.error("No features data available.")
 
 
 # ── Main ───────────────────────────────────────────────────────────────────────
@@ -1607,7 +1978,7 @@ span[style*="background:#f0a500"], span[style*="background:#5c9be0"], span[style
 
 def main():
     st.set_page_config(
-        page_title="PitchIQ — Transfer Market Intelligence",
+        page_title="The Scout Society — Transfer Market Intelligence",
         page_icon="⚽",
         layout="wide",
     )
@@ -1629,12 +2000,12 @@ def main():
     }
 
     with st.sidebar:
-        st.markdown("## PitchIQ")
+        st.markdown("## The Scout Society")
         st.markdown("<span style='color:#04F5FF;font-size:0.8rem;letter-spacing:0.1em'>TRANSFER MARKET INTELLIGENCE</span>", unsafe_allow_html=True)
         st.divider()
         page = st.radio(
             "Navigate",
-            ["⚽ Player Lookup", "📊 Model Explorer", "🌍 Nationality & Position"],
+            ["⚽ Player Lookup", "📊 Model Explorer", "🌍 Nationality & Position", "🔗 Cross-League"],
             label_visibility="collapsed",
         )
         st.divider()
@@ -1645,8 +2016,10 @@ def main():
         page_player_lookup(results_df, coefs_by_ls)
     elif page == "📊 Model Explorer":
         page_model_explorer(features_df)
-    else:
+    elif page == "🌍 Nationality & Position":
         page_nat_pos(results_df, coefs_by_ls)
+    else:
+        page_cross_league(results_df, features_df, coefs_by_ls)
 
 
 main()
