@@ -16,10 +16,11 @@ MERGED_PATH  = os.path.join(_PROC_PL_2526, "merged.csv")
 OUT_PATH     = os.path.join(_PROC_PL_2526, "cleaned.csv")
 
 # ---------------------------------------------------------------------------
-# Position mapping — raw Transfermarkt labels → standardised groups
-# Centre-Back is the baseline (no dummy created)
+# Regression dummy mapping — raw Transfermarkt labels → model dummy groups.
+# position_tm (the raw TM label) is kept separately for display.
+# Centre-Back is the baseline (no dummy created).
 # ---------------------------------------------------------------------------
-POSITION_MAP = {
+REGRESSION_MAP = {
     "Centre-Forward":     "striker",
     "Second Striker":     "striker",
     "Left Winger":        "winger",
@@ -110,15 +111,17 @@ NATIONALITY_DUMMIES = [
 
 
 def apply_position_dummies(df: pd.DataFrame) -> pd.DataFrame:
-    """Map raw position column to position group, then create dummy columns."""
-    df["position_group"] = df["position"].map(POSITION_MAP)
+    """Preserve raw TM position as position_tm, create regression dummy columns."""
+    # Keep raw TM position name for display
+    if "position_tm" not in df.columns:
+        df["position_tm"] = df["position"]
 
-    # For unknown positions, attempt a partial match
+    df["position_group"] = df["position_tm"].map(REGRESSION_MAP)
+
     unknown_mask = df["position_group"].isna()
     if unknown_mask.any():
         print(f"  WARNING: {unknown_mask.sum()} players have unrecognised positions:")
-        print(df.loc[unknown_mask, ["player_name", "position"]].to_string())
-        # Default unknown to centre_back (baseline) so they're still usable
+        print(df.loc[unknown_mask, ["player_name", "position_tm"]].to_string())
         df.loc[unknown_mask, "position_group"] = "centre_back"
 
     for group in POSITION_DUMMIES:

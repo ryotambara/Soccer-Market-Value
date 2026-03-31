@@ -335,20 +335,46 @@ def infer_nat_dummy(row):
     return None
 
 
+# Full TM position names → 8-group display label (used for key stats / WI / peers)
+_TM_TO_GROUP = {
+    "Goalkeeper":         "Goalkeeper",
+    "Centre-Back":        "Centre-Back",
+    "Left-Back":          "Fullback",
+    "Right-Back":         "Fullback",
+    "Left Wing-Back":     "Fullback",
+    "Right Wing-Back":    "Fullback",
+    "Defensive Midfield": "CDM",
+    "Central Midfield":   "Central Mid",
+    "Attacking Midfield": "Attacking Mid",
+    "Left Midfield":      "Winger",
+    "Right Midfield":     "Winger",
+    "Left Winger":        "Winger",
+    "Right Winger":       "Winger",
+    "Second Striker":     "Striker",
+    "Centre-Forward":     "Striker",
+}
+
+
 def infer_pos_group(row):
-    """Return display label like 'Striker', 'Centre-Back', etc."""
-    # Try position_group (Bundesliga) and position (PL) columns
+    """Return 8-group label ('Striker', 'Centre-Back', etc.) for internal logic."""
+    # position_tm is the authoritative TM name — map it to 8 groups
+    tm = str(row.get("position_tm", "") or "").strip()
+    if tm and tm not in ("nan", ""):
+        g = _TM_TO_GROUP.get(tm)
+        if g:
+            return g
+
+    # Fall back to position_group (abbreviated or long form)
     for col_name in ("position_group", "position"):
-        pg = row.get(col_name, "")
-        if not isinstance(pg, str) or not pg or pg in ("nan", ""):
+        pg = str(row.get(col_name, "") or "").strip()
+        if not pg or pg in ("nan", ""):
             continue
-        # Already a display label?
         if pg in _POS_GROUP_TO_LABEL.values():
             return pg
-        # Raw group name (e.g. "striker", "centre_back")
         mapped = _POS_GROUP_TO_LABEL.get(pg)
         if mapped:
             return mapped
+
     # Fall back to dummy columns (check both long and abbreviated names)
     _dummy_check = [
         ("is_goalkeeper", "Goalkeeper"), ("is_gk", "Goalkeeper"),
@@ -364,6 +390,14 @@ def infer_pos_group(row):
         if col in row.index and row[col] >= 0.5:
             return label
     return "Unknown"
+
+
+def _get_display_pos(row):
+    """Return the best position string for display (full TM name when available)."""
+    tm = str(row.get("position_tm", "") or "").strip()
+    if tm and tm not in ("nan", ""):
+        return tm
+    return infer_pos_group(row)
 
 
 # ── Player Detail ──────────────────────────────────────────────────────────────
@@ -427,7 +461,7 @@ def _show_player_detail(player, results_df, coefs_by_ls):
     with col2:
         st.metric("Age", age)
         st.metric("Nationality", nat)
-        st.metric("Position", pos_label)
+        st.metric("Position", _get_display_pos(player))
     with col3:
         delta_str = None
         a_f = _safe_float(actual, float("nan"))
@@ -682,10 +716,11 @@ def _show_player_detail(player, results_df, coefs_by_ls):
 def page_player_lookup(df, coefs_by_ls):
     st.title("Player Lookup")
 
-    # Add computed position label column for filtering
-    if "_pos_label" not in df.columns:
+    # Add position columns for filtering and display
+    if "_pos_label" not in df.columns or "_pos_display" not in df.columns:
         df = df.copy()
-        df["_pos_label"] = df.apply(infer_pos_group, axis=1)
+        df["_pos_label"]   = df.apply(infer_pos_group, axis=1)   # 8-group, internal
+        df["_pos_display"] = df.apply(_get_display_pos, axis=1)  # TM name, display
 
     with st.sidebar:
         st.subheader("League / Season")
@@ -705,7 +740,7 @@ def page_player_lookup(df, coefs_by_ls):
         st.subheader("Filters")
         search = st.text_input("Search player name", "")
 
-        pos_opts = sorted(df["_pos_label"].dropna().unique().tolist())
+        pos_opts = sorted(df["_pos_display"].dropna().unique().tolist())
         pos_filter = st.multiselect("Position", options=pos_opts)
 
         all_clubs = sorted(df["club"].dropna().unique().tolist()) if "club" in df.columns else []
@@ -767,7 +802,7 @@ def page_player_lookup(df, coefs_by_ls):
     if search:
         filtered = filtered[filtered["player_name"].str.contains(search, case=False, na=False)]
     if pos_filter:
-        filtered = filtered[filtered["_pos_label"].isin(pos_filter)]
+        filtered = filtered[filtered["_pos_display"].isin(pos_filter)]
     if sel_clubs:
         filtered = filtered[filtered["club"].isin(sel_clubs)]
     if nat_filter:
@@ -810,7 +845,7 @@ def page_player_lookup(df, coefs_by_ls):
 
     display_cols = {
         "player_name": "Player", "club": "Club", "Status": "Status",
-        "league": "League", "season": "Season", "_pos_label": "Position",
+        "league": "League", "season": "Season", "_pos_display": "Position",
         "age": "Age", "market_value_eur": "Actual Value",
         "display_predicted": "Predicted Value",
         "display_residual": "Residual", "display_valuation": "Valuation",

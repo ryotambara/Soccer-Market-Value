@@ -20,10 +20,11 @@ MERGED_PATH   = os.path.join(_PROC_BL_2526, "merged.csv")
 OUT_PATH      = os.path.join(_PROC_BL_2526, "cleaned.csv")
 
 # ---------------------------------------------------------------------------
-# Position mapping — Transfermarkt labels → standardised groups
+# Regression dummy mapping — Transfermarkt labels → model dummy groups.
+# position_tm (raw TM label) is kept separately for display.
 # Centre-Back is baseline (no dummy created).
 # ---------------------------------------------------------------------------
-POSITION_MAP = {
+REGRESSION_MAP = {
     "Centre-Forward":     "striker",
     "Second Striker":     "striker",
     "Left Winger":        "winger",
@@ -110,7 +111,7 @@ NATIONALITY_DUMMIES = [
 def resolve_position_group(row: pd.Series) -> str:
     tm_pos = str(row.get("position_tm", "")).strip()
     if tm_pos and tm_pos != "nan":
-        group = POSITION_MAP.get(tm_pos)
+        group = REGRESSION_MAP.get(tm_pos)
         if group:
             return group
 
